@@ -21,6 +21,11 @@ Requires the superpowers plugin for `requesting-code-review` and
 - [opencode-implementer-prompt.md](opencode-implementer-prompt.md) — per-task message template for the OpenCode session
 - [task-reviewer-prompt.md](task-reviewer-prompt.md) — Claude reviewer subagent template
 - `scripts/` — `task-brief`, `review-package`, `sdd-workspace` (bash)
+- `scripts/oc-dispatch` — runs one task headless via `opencode run` in its own
+  worktree and prints a JSON result; no MCP server needed
+- `.opencode/agents/implementer.md` — the restricted OpenCode agent
+  `oc-dispatch` uses (no push, no cluster/SSH access, no `.env` reads)
+- `tests/oc-dispatch.sh` — self-check for `oc-dispatch` against a stub `opencode`
 
 ## Install
 
