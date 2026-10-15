@@ -9,8 +9,11 @@ progress ledger, and a final whole-branch review.
 
 The dispatch process is adapted from the
 [superpowers](https://github.com/obra/superpowers) plugin's
-`subagent-driven-development` skill; the scripts in `scripts/` are unmodified
-copies from superpowers 6.1.1.
+`subagent-driven-development` skill; the scripts in `scripts/` started as
+copies from superpowers 6.1.1 (since patched: section-bounded briefs that
+include Global Constraints, empty-range guard in `review-package`).
+Requires the superpowers plugin for `requesting-code-review` and
+`finishing-a-development-branch`.
 
 ## Layout
 
@@ -18,6 +21,11 @@ copies from superpowers 6.1.1.
 - [opencode-implementer-prompt.md](opencode-implementer-prompt.md) — per-task message template for the OpenCode session
 - [task-reviewer-prompt.md](task-reviewer-prompt.md) — Claude reviewer subagent template
 - `scripts/` — `task-brief`, `review-package`, `sdd-workspace` (bash)
+- `scripts/oc-dispatch` — runs one task headless via `opencode run` in its own
+  worktree and prints a JSON result; no MCP server needed
+- `.opencode/agents/implementer.md` — the restricted OpenCode agent
+  `oc-dispatch` uses (no push, no cluster/SSH access, no `.env` reads)
+- `tests/oc-dispatch.sh` — self-check for `oc-dispatch` against a stub `opencode`
 
 ## Install
 

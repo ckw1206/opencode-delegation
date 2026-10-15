@@ -41,4 +41,5 @@ fi
 } > "$out"
 
 commits=$(git rev-list --count "${base}..${head}")
+[ "$commits" -gt 0 ] || { echo "no commits in ${base}..${head} - implementer did not commit?" >&2; exit 4; }
 echo "wrote ${out}: ${commits} commit(s), $(wc -c < "$out" | tr -d ' ') bytes"

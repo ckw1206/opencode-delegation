@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Dispatch one plan task to a headless OpenCode session in its own git
+# worktree, wait for it to finish, and print one JSON result line.
+#
+# Usage (run from the main repo):
+#   oc-dispatch PLAN_FILE TASK_N WORKTREE                      first turn
+#   oc-dispatch PLAN_FILE TASK_N WORKTREE SESSION_ID MSG_FILE  follow-up turn
+#                                       (answers to questions, review findings)
+#
+# The first turn creates WORKTREE on a new branch oc/task-N from HEAD, writes
+# the brief into WORKTREE/.superpowers/sdd/ and records the task's base commit.
+# OpenCode runs as the `implementer` agent shipped in ../.opencode/agents/.
+#
+# No timeout of its own: when a Claude Code Bash call passes its timeout (max
+# 600s), the command is moved to the background, not killed, and the caller is
+# re-invoked when it exits; read the result from the background output file.
+#
+# Exit 0: result printed; read .status (DONE, DONE_WITH_CONCERNS, BLOCKED,
+#         NEEDS_CONTEXT). Exit 1: .status is ERROR (OpenCode failed or broke
+#         protocol; .error says why). Exit 2: usage or setup error.
+set -euo pipefail
+
+[ $# -eq 3 ] || [ $# -eq 5 ] || {
+  echo "usage: oc-dispatch PLAN_FILE TASK_N WORKTREE [SESSION_ID MSG_FILE]" >&2
+  exit 2
+}
+[ -f "$1" ] || { echo "no such plan file: $1" >&2; exit 2; }
+plan=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
+n=$2 wt=$3 sid=${4:-} msgfile=${5:-}
+here=$(cd "$(dirname "$0")" && pwd)
+branch="oc/task-$n"
+command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
+command -v opencode >/dev/null || { echo "opencode is not on PATH" >&2; exit 2; }
+# The implementer agent ships with this skill; OPENCODE_CONFIG_DIR layers it
+# over the user's global and project config. An unknown --agent makes opencode
+# fall back to its allow-everything default agent, so refuse to start unless
+# the implementer agent resolves.
+export OPENCODE_CONFIG_DIR="$here/../.opencode"
+agents=$(opencode agent list 2>/dev/null || true)
+grep -q '^implementer ' <<< "$agents" ||
+  { echo "opencode cannot load the implementer agent from $OPENCODE_CONFIG_DIR" >&2; exit 2; }
+
+if [ -z "$sid" ]; then
+  [ ! -e "$wt" ] || { echo "worktree $wt already exists; follow-up turns need SESSION_ID MSG_FILE" >&2; exit 2; }
+  ! git show-ref --verify --quiet "refs/heads/$branch" ||
+    { echo "branch $branch already exists; remove it or continue its session" >&2; exit 2; }
+  "$here/task-brief" "$plan" "$n" /dev/null >/dev/null # fail before creating anything
+  git worktree add -q -b "$branch" "$wt" HEAD
+else
+  [ -d "$wt" ] || { echo "no worktree at $wt for follow-up turn" >&2; exit 2; }
+  [ -f "$msgfile" ] || { echo "no such message file: $msgfile" >&2; exit 2; }
+fi
+wt=$(cd "$wt" && pwd)
+sdd=$(cd "$wt" && "$here/sdd-workspace")
+brief=$sdd/task-$n-brief.md
+report=$sdd/task-$n-report.json
+events=$sdd/task-$n-events.jsonl
+
+args=(run --agent implementer --format json --dir "$wt")
+if [ -z "$sid" ]; then
+  "$here/task-brief" "$plan" "$n" "$brief" >/dev/null
+  git -C "$wt" rev-parse HEAD > "$sdd/task-$n-base"
+  args+=(--title "task-$n" "Task $n. BRIEF: $brief REPORT: $report")
+else
+  args+=(--session "$sid" "$(cat "$msgfile")
+
+When done, rewrite REPORT: $report")
+fi
+rm -f "$report" # a stale report must never pass for this turn's result
+
+rc=0
+opencode "${args[@]}" < /dev/null > "$events" 2> "$sdd/task-$n-stderr.log" || rc=$?
+
+sid=$(jq -rn '[inputs | .sessionID // empty][0] // empty' "$events" 2>/dev/null || true)
+err=$(jq -rn '[inputs | select(.type == "error") | .error.data.message // .error.name // "error event"][0] // empty' "$events" 2>/dev/null || true)
+base=$(cat "$sdd/task-$n-base")
+head=$(git -C "$wt" rev-parse HEAD)
+on=$(git -C "$wt" symbolic-ref --short -q HEAD || echo detached)
+commits=$(git -C "$wt" rev-list --count "$base..$head")
+dirty=$([ -n "$(git -C "$wt" status --porcelain)" ] && echo true || echo false)
+
+result() { # $1 = JSON object to extend with the dispatch facts
+  jq -c --arg session "$sid" --arg branch "$on" --arg base "$base" --arg head "$head" \
+    --argjson commits "$commits" --argjson dirty "$dirty" --arg worktree "$wt" \
+    --arg brief "$brief" --arg report "$report" --arg events "$events" \
+    '. + {session: $session, branch: $branch, base: $base, head: $head, commits: $commits,
+          dirty: $dirty, worktree: $worktree, brief: $brief, report: $report, events: $events}' <<< "$1"
+}
+fail() { result "$(jq -n --arg e "$1" '{status: "ERROR", error: $e}')"; exit 1; }
+
+[ "$rc" -eq 0 ] || fail "opencode exited $rc: ${err:-see $sdd/task-$n-stderr.log}"
+[ -z "$err" ] || fail "$err"
+[ "$on" = "$branch" ] || fail "worktree left branch $branch (now on $on)"
+[ -s "$report" ] || fail "no report written to $report"
+status=$(jq -r 'if type == "object" then .status else empty end' "$report" 2>/dev/null || true)
+case $status in
+  DONE | DONE_WITH_CONCERNS) [ "$commits" -gt 0 ] || fail "status $status but no commits in $base..$head" ;;
+  BLOCKED | NEEDS_CONTEXT) ;;
+  *) fail "report is not a JSON object with a known status" ;;
+esac
+result "$(cat "$report")"
