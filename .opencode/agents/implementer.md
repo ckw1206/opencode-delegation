@@ -17,7 +17,6 @@ permission:
     "ssh*": deny
     "scp*": deny
     "sudo*": deny
-    "vpn*": deny
   read:
     "*": allow
     "*.env": deny
