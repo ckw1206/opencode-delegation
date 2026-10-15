@@ -194,7 +194,7 @@ For each task, in order:
 ## Final whole-branch review
 
 After all tasks: run `scripts/review-package MERGE_BASE HEAD` (MERGE_BASE =
-`git merge-base main HEAD` or the branch's start commit) and dispatch a Claude
+`git merge-base <base-branch> HEAD` or the branch's start commit) and dispatch a Claude
 reviewer subagent on the most capable available model, using
 superpowers:requesting-code-review's code-reviewer template, with the package
 path and the ledger's accumulated Minor findings so it can triage which must be
@@ -211,7 +211,9 @@ place re-dispatches completed work — the most expensive failure there is.
 Track progress in a ledger file, not only in todos.
 
 - At skill start, check
-  `"$(git rev-parse --show-toplevel)/.superpowers/sdd/progress.md"`. Tasks
+  `"$(git rev-parse --show-toplevel)/.superpowers/sdd/progress-<plan-file-basename>.md"`
+  (one ledger per plan, so another plan or a superpowers SDD run in the same
+  repo can't mark your tasks complete). Tasks
   listed there as complete are DONE — resume at the first task not marked
   complete.
 - When a task's review comes back clean, append:

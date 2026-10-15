@@ -9,8 +9,11 @@ progress ledger, and a final whole-branch review.
 
 The dispatch process is adapted from the
 [superpowers](https://github.com/obra/superpowers) plugin's
-`subagent-driven-development` skill; the scripts in `scripts/` are unmodified
-copies from superpowers 6.1.1.
+`subagent-driven-development` skill; the scripts in `scripts/` started as
+copies from superpowers 6.1.1 (since patched: section-bounded briefs that
+include Global Constraints, empty-range guard in `review-package`).
+Requires the superpowers plugin for `requesting-code-review` and
+`finishing-a-development-branch`.
 
 ## Layout
 
