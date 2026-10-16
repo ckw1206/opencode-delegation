@@ -26,83 +26,27 @@ the work is called done.
 
 ## Installation
 
-Installation differs by agent. If you use more than one, install the skill
-separately for each one. Every install is the same shape: a folder named
-`opencode-delegation` containing `SKILL.md`, placed where the agent discovers
-skills.
+```bash
+npx skills add ckw1206/opencode-delegation -g
+```
 
-Requirements for all agents:
+This uses the [skills CLI](https://github.com/vercel-labs/skills), which
+fetches this repo from GitHub and installs it for the agents you pick (Claude
+Code, Codex, Cursor, OpenCode, Gemini CLI, Hermes, and more), linking each one
+to a single copy. `-a claude-code -a codex …` picks agents without the prompt;
+drop `-g` to install into the current project instead of your home directory.
+
+Manual alternative: clone this repo into your agent's skills directory as
+`opencode-delegation/`, e.g. `~/.claude/skills/opencode-delegation`.
+
+Requirements:
 
 - The orchestrating agent must be able to dispatch fresh subagent sessions —
   the per-task review gate runs in one.
-- `bash` and `git` on the orchestrator's `PATH` (the helpers in `scripts/`)
+- `bash` and `git` on the orchestrator's `PATH` (the helpers in `scripts/`);
+  `oc-dispatch` also needs `jq`
 - [OpenCode](https://opencode.ai) reachable — either the `opencode` CLI
   (the `oc-dispatch` flow) or the opencode-mcp server connected to the agent
   (the MCP flow)
-- Keep the directory intact: `scripts/` is invoked by relative path from
-  `SKILL.md`
-
-### Claude Code
-
-Personal (all projects):
-
-```bash
-git clone https://github.com/ckw1206/opencode-delegation.git \
-  ~/.claude/skills/opencode-delegation
-```
-
-For a single project, clone into the repo at `.claude/skills/` instead.
-
-### Cursor
-
-Project-level:
-
-```bash
-git clone https://github.com/ckw1206/opencode-delegation.git \
-  .cursor/skills/opencode-delegation
-```
-
-Personal (all projects): clone into `~/.cursor/skills/` instead. Restart the
-agent session after installing.
-
-### Codex CLI
-
-```bash
-git clone https://github.com/ckw1206/opencode-delegation.git \
-  ~/.codex/skills/opencode-delegation
-```
-
-`~/.agents/skills/opencode-delegation` works too (the cross-tool alias).
-
-### Hermes Agent
-
-```bash
-git clone https://github.com/ckw1206/opencode-delegation.git \
-  ~/.hermes/skills/opencode-delegation
-```
-
-Restart active Hermes sessions so the skill registers. For a specific profile,
-use `~/.hermes/profiles/<name>/skills/` instead.
-
-### OpenCode
-
-OpenCode also discovers `~/.claude/skills/`, so a Claude Code install is
-picked up automatically. To install natively:
-
-```bash
-git clone https://github.com/ckw1206/opencode-delegation.git \
-  ~/.config/opencode/skills/opencode-delegation
-```
-
-### Gemini CLI
-
-```bash
-git clone https://github.com/ckw1206/opencode-delegation.git \
-  ~/.gemini/skills/opencode-delegation
-```
-
-### Other agents
-
-Any agent that follows the `SKILL.md` convention can load this from the
-cross-tool directory `~/.agents/skills/opencode-delegation/` (supported as an
-alias by, among others, Codex, Gemini CLI, and OpenCode).
+- Keep the directory intact: `SKILL.md` runs the helpers in `scripts/`, and
+  `oc-dispatch` loads the implementer agent from `.opencode/`

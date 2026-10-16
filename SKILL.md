@@ -15,6 +15,10 @@ Execute a plan by dispatching a fresh OpenCode session per task, a task review
 (spec compliance + code quality) by a reviewer subagent after each, and
 a broad whole-branch review at the end.
 
+Paths like `scripts/task-brief` are relative to this skill's directory (the one
+containing this `SKILL.md`), not the user's repo — resolve that directory before
+running them.
+
 **Core principle:** fresh OpenCode session per task + task review (spec +
 quality) + broad final review = high quality, fast iteration.
 

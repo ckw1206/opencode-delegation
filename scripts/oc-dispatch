@@ -11,9 +11,10 @@
 # the brief into WORKTREE/.sdd/ and records the task's base commit.
 # OpenCode runs as the `implementer` agent shipped in ../.opencode/agents/.
 #
-# No timeout of its own: when a Claude Code Bash call passes its timeout (max
-# 600s), the command is moved to the background, not killed, and the caller is
-# re-invoked when it exits; read the result from the background output file.
+# No timeout of its own. A task can outlast a tool call's timeout, so run it as
+# a background command where your harness supports one (Claude Code's Bash tool,
+# for example, backgrounds a call past its 600s timeout instead of killing it)
+# and read the result from the background output file.
 #
 # Exit 0: result printed; read .status (DONE, DONE_WITH_CONCERNS, BLOCKED,
 #         NEEDS_CONTEXT). Exit 1: .status is ERROR (OpenCode failed or broke
