@@ -1,5 +1,5 @@
 ---
-description: Headless task implementer dispatched by Claude via scripts/oc-dispatch. Implements one plan task in its own git worktree and writes a JSON report.
+description: Headless task implementer dispatched by the orchestrating agent via scripts/oc-dispatch. Implements one plan task in its own git worktree and writes a JSON report.
 mode: primary
 permission:
   bash:

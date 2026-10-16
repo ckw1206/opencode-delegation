@@ -12,7 +12,7 @@ description: >-
 # OpenCode Development Delegation
 
 Execute a plan by dispatching a fresh OpenCode session per task, a task review
-(spec compliance + code quality) by a Claude reviewer subagent after each, and
+(spec compliance + code quality) by a reviewer subagent after each, and
 a broad whole-branch review at the end.
 
 **Core principle:** fresh OpenCode session per task + task review (spec +
@@ -30,9 +30,8 @@ quality) + broad final review = high quality, fast iteration.
 Three separate hands, so nobody grades their own homework:
 
 - **OpenCode implements.** It writes code, writes tests, runs them, commits.
-- **A Claude reviewer subagent reviews** each task's diff — a different engine
-  from the implementer, dispatched fresh per review with no sunk cost in the
-  code.
+- **A reviewer subagent reviews** each task's diff — a separate session from
+  the implementer, dispatched fresh per review with no sunk cost in the code.
 - **You are the controller and staff engineer.** You pressure-test the plan,
   curate exactly the context each dispatch needs, adjudicate review findings,
   and you alone decide when the work is done.
@@ -163,8 +162,8 @@ For each task, in order:
      ignore an escalation or push the implementer to retry without changing
      something.
 5. **Review**: run `scripts/review-package BASE HEAD` (prints the diff-file
-   path; the package never enters your context), then dispatch a Claude
-   reviewer subagent per [task-reviewer-prompt.md](task-reviewer-prompt.md)
+   path; the package never enters your context), then dispatch a reviewer
+   subagent per [task-reviewer-prompt.md](task-reviewer-prompt.md)
    with the brief, report, and package paths plus the Global Constraints
    copied verbatim. When filling the template: no open-ended directives
    ("check all uses") without a concrete task-specific reason, no re-running
@@ -194,15 +193,17 @@ For each task, in order:
 ## Final whole-branch review
 
 After all tasks: run `scripts/review-package MERGE_BASE HEAD` (MERGE_BASE =
-`git merge-base <base-branch> HEAD` or the branch's start commit) and dispatch a Claude
+`git merge-base <base-branch> HEAD` or the branch's start commit) and dispatch a
 reviewer subagent on the most capable available model, using
-superpowers:requesting-code-review's code-reviewer template, with the package
-path and the ledger's accumulated Minor findings so it can triage which must be
-fixed before merge.
+[task-reviewer-prompt.md](task-reviewer-prompt.md) adapted to branch scope —
+the full plan file in place of a single task brief, the package path, and the
+ledger's accumulated Minor findings so it can triage which must be fixed
+before merge.
 
 If it returns findings, dispatch **one** OpenCode fix session with the complete
-findings list — not one fixer per finding — then re-review. When clean, use
-superpowers:finishing-a-development-branch.
+findings list — not one fixer per finding — then re-review. When clean, finish
+the branch with the user: merge to the base branch, open a pull request, or
+keep the branch — then clean up the `.sdd` workspace and any worktree.
 
 ## Durable progress
 
@@ -211,9 +212,9 @@ place re-dispatches completed work — the most expensive failure there is.
 Track progress in a ledger file, not only in todos.
 
 - At skill start, check
-  `"$(git rev-parse --show-toplevel)/.superpowers/sdd/progress-<plan-file-basename>.md"`
-  (one ledger per plan, so another plan or a superpowers SDD run in the same
-  repo can't mark your tasks complete). Tasks
+  `"$(git rev-parse --show-toplevel)/.sdd/progress-<plan-file-basename>.md"`
+  (one ledger per plan, so another plan's run in the same repo can't mark your
+  tasks complete). Tasks
   listed there as complete are DONE — resume at the first task not marked
   complete.
 - When a task's review comes back clean, append:
@@ -260,9 +261,12 @@ ran it and saw it pass); no unaddressed findings remain. Then summarize:
 
 ## Integration
 
-- **superpowers:writing-plans** — structure for the plan Phase 0 produces
-- **superpowers:using-git-worktrees** — isolated workspace before execution
-- **superpowers:requesting-code-review** — template for the final review
-- **superpowers:finishing-a-development-branch** — after the final review is clean
+- Run the execution in an isolated workspace (a git worktree off the base
+  branch) — never on main/master.
+- If your agent has a planning skill, have it structure the plan Phase 0
+  produces; the format requirements above are what the machinery needs.
+- If your agent has its own code-review skill, its reviewer template can stand
+  in for [task-reviewer-prompt.md](task-reviewer-prompt.md) — the same two
+  verdicts apply (spec compliance AND code quality).
 - OpenCode should use TDD for each task (e.g. its `/test-driven-development`
   skill, if exposed)

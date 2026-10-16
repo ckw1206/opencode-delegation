@@ -1,19 +1,21 @@
 # Task Reviewer Prompt Template
 
 Use this template when dispatching the per-task reviewer. The reviewer is a
-**Claude-native subagent** (Agent tool) — a separate engine from OpenCode, so
-the implementer never grades its own work. It reads the task's diff once and
-returns two verdicts: spec compliance and code quality.
+**subagent** — dispatched with your harness's subagent mechanism, a separate
+session from OpenCode, so the implementer never grades its own work. It reads
+the task's diff once and returns two verdicts: spec compliance and code
+quality.
 
 **Purpose:** Verify one task's implementation matches its requirements (nothing
 more, nothing less) and is well-built (clean, tested, maintainable)
 
 ```
-Agent tool (subagent_type: general-purpose):
+Subagent dispatch (your harness's subagent mechanism):
   description: "Review Task N (spec + quality)"
-  model: [MODEL — REQUIRED: sonnet for typical diffs; opus for subtle or
-         risky ones (concurrency, security, cross-cutting API changes).
-         An omitted model silently inherits the session's most expensive one.]
+  model: [MODEL — REQUIRED: a solid mid-tier model for typical diffs; your
+         most capable model for subtle or risky ones (concurrency, security,
+         cross-cutting API changes). An omitted model silently inherits the
+         session's model — pick deliberately.]
   prompt: |
     You are reviewing one task's implementation: first whether it matches its
     requirements, then whether it is well-built. This is a task-scoped gate,
@@ -168,7 +170,8 @@ Agent tool (subagent_type: general-purpose):
 ```
 
 **Placeholders:**
-- `[MODEL]` — REQUIRED: sonnet for typical diffs, opus for subtle/risky ones
+- `[MODEL]` — REQUIRED: a solid mid-tier model for typical diffs, your most
+  capable model for subtle/risky ones
 - `[BRIEF_FILE]` — REQUIRED: the task brief file (`scripts/task-brief PLAN N`
   prints the path; same file the implementer worked from)
 - `[GLOBAL_CONSTRAINTS]` — the binding requirements copied verbatim from

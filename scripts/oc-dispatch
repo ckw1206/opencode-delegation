@@ -8,7 +8,7 @@
 #                                       (answers to questions, review findings)
 #
 # The first turn creates WORKTREE on a new branch oc/task-N from HEAD, writes
-# the brief into WORKTREE/.superpowers/sdd/ and records the task's base commit.
+# the brief into WORKTREE/.sdd/ and records the task's base commit.
 # OpenCode runs as the `implementer` agent shipped in ../.opencode/agents/.
 #
 # No timeout of its own: when a Claude Code Bash call passes its timeout (max

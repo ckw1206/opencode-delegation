@@ -6,7 +6,7 @@
 # or higher level, so trailing sections never leak into the last task.
 #
 # Usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]
-# Default OUTFILE: <repo-root>/.superpowers/sdd/task-<N>-brief.md
+# Default OUTFILE: <repo-root>/.sdd/task-<N>-brief.md
 # (per worktree; concurrent runs in the same working tree share it).
 set -euo pipefail
 
