@@ -1,12 +1,12 @@
 ---
 name: opencode-delegation
 description: >-
-  Use when the user wants OpenCode (via the opencode-mcp server) to do the
-  hands-on coding — building a feature, fixing a bug, refactoring, writing a
-  script, or any multi-step implementation task. Triggers include "have OpenCode
-  build this", "delegate this to OpenCode", "use OpenCode to implement", or
-  OpenCode delegation being the established working mode for the project. Use
-  even when the user names only the implementation, not the review process.
+  Use when the user wants OpenCode to do the hands-on coding — building a
+  feature, fixing a bug, refactoring, writing a script, or any multi-step
+  implementation task. Triggers include "have OpenCode build this", "delegate
+  this to OpenCode", "use OpenCode to implement", or OpenCode delegation being
+  the established working mode for the project. Use even when the user names
+  only the implementation, not the review process.
 ---
 
 # OpenCode Development Delegation
@@ -52,65 +52,72 @@ and the tool results carry the record.
 tasks. The only reasons to stop are: a BLOCKED status you cannot resolve,
 ambiguity that genuinely prevents progress, or all tasks complete.
 
-## Talking to OpenCode
+## Dispatching with oc-dispatch
 
-OpenCode is reached through the **opencode-mcp** server. Before your first
-delegation, look at the tools actually available to you and find the ones whose
-names contain `opencode` — the server typically exposes something to send a
-prompt/message and get OpenCode's reply, and is usually session-based (a tool
-to start or identify a session, then a tool to send turns into it). Use
-whatever shape is present rather than assuming a fixed tool name.
+OpenCode runs headless through `scripts/oc-dispatch`, one task per call, as
+the restricted `implementer` agent shipped in `.opencode/agents/` (no pushes,
+no cluster or SSH access, no `.env` reads). It cannot ask questions
+interactively; it reports NEEDS_CONTEXT instead. Run it from the user's repo
+root, on the working branch:
 
-If you can't find any `opencode` tool, stop and tell the user the opencode-mcp
-server doesn't appear to be connected in this session (a freshly added MCP
-usually needs the session restarted before its tools register). Don't silently
-fall back to doing the implementation yourself — that defeats the whole purpose.
+```bash
+SKILL=/path/to/this/skill   # the directory containing this SKILL.md
+wt="$("$SKILL/scripts/sdd-workspace")/wt/task-N"
+"$SKILL/scripts/oc-dispatch" PLAN_FILE N "$wt"                      # first turn
+"$SKILL/scripts/oc-dispatch" PLAN_FILE N "$wt" SESSION_ID MSG_FILE  # follow-up
+```
+
+The first turn creates the worktree on a new branch `oc/task-N` from HEAD and
+hands OpenCode the task's brief — its plan section plus the Global Constraints
+— and nothing else. A follow-up turn sends MSG_FILE (your answers, or review
+findings) into the same session; the task's base commit is kept.
+
+Each call prints one JSON line: the implementer's report (`status`, `summary`,
+`files_changed`, `tests`, `concerns`, `questions`) plus `session`, `base`,
+`head`, `commits`, `worktree`, `brief`, `report`, `events`. Exit 0 = a real
+status; exit 1 = `status: ERROR` with the cause in `.error`; exit 2 = usage or
+setup error.
+
+- **It blocks until OpenCode finishes — often minutes.** Run it as a background
+  command if your harness has one and tell the user the task is running;
+  otherwise give it the longest timeout available.
+- **Exit 2 with "opencode is not on PATH" or "jq is required":** stop and tell
+  the user what to install (the README lists the requirements). Don't install
+  it yourself, and don't fall back to implementing — that defeats the whole
+  purpose.
+- **ERROR:** read `.error` (and the `events` file) before anything else. If it
+  points at the provider or model, the user fixes that (`opencode providers
+  login`) before you retry. Retry through a follow-up turn when `.session` is
+  set; otherwise `git worktree remove --force "$wt" && git branch -D oc/task-N`
+  and dispatch fresh. Never retry without changing something.
+- **If a dispatch is denied at the permission prompt**, do not resend the
+  identical call. Say once what needs approving, then wait for the user's
+  go-ahead.
 
 **Session lifecycle:** one fresh OpenCode session per task. A task's session is
 reused for exactly two things — answering that task's NEEDS_CONTEXT questions,
 and fix rounds after its review — and is abandoned when the task is marked
-complete. The next task starts a new session: a fresh implementer gets its
-task, the interfaces it touches, and the global constraints — never the
-accumulated history of prior tasks.
+complete. The next task starts a new session with its own brief and the code
+in its worktree — never the accumulated history of prior tasks.
 
-Every dispatch is a briefing to a capable colleague who can't see your screen:
-where to work, what this step is, the relevant slice of the approved plan, and
-the constraints that bind it. Exact values live in the brief file, not the
-message.
-
-## Dispatch mechanics (avoid the frozen-call trap)
-
-- **Smoke-test before the first real dispatch.** A health check only proves the
-  server is up, not that the chosen provider/model answers. Send one trivial
-  prompt (e.g. "reply with the single word READY") and confirm a non-empty
-  response comes back before delegating any actual work. If the smoke test
-  hangs or returns empty, fix the provider/model choice first — never queue
-  real tasks onto an unverified pipe.
-- **Never dispatch with a blocking wait-for-completion tool** (e.g.
-  `opencode_run`, `opencode_wait`). Implementation turns take minutes; a
-  blocking call looks frozen in the user's terminal, gets interrupted, and the
-  interrupt registers as a permission rejection — a loop that goes nowhere.
-- **Dispatch async instead**: fire-and-forget (e.g. `opencode_fire`) to send
-  the task, then poll cheap status (e.g. `opencode_check`) between doing your
-  own review prep. Tell the user the task is running and roughly how long.
-- **If a dispatch call is denied at the permission prompt**, do not resend the
-  identical call. Say once what needs approving (suggest "always allow" for the
-  opencode tools), then wait for the user's go-ahead.
+Every follow-up message is a briefing to a capable colleague who can't see your
+screen: specific, with file:line, why, and what good looks like. Exact values
+live in the brief file, not the message.
 
 ## Phase 0 — Get a sound plan
 
 If a written implementation plan already exists for this work, skip to
-Pre-flight. Otherwise, have OpenCode produce one — if it exposes a planning
-skill (e.g. `/writing-plans`), tell it to use that — covering problem
-analysis, requirements, approach, risks and assumptions, test strategy, and
-step-by-step tasks.
+Pre-flight. Otherwise write one yourself — with your agent's planning skill if
+it has one — covering problem analysis, requirements, approach, risks and
+assumptions, test strategy, and step-by-step tasks. A plan is not
+implementation code; writing it is the controller's job.
 
 **Format requirements** (the execution machinery depends on them): the plan is
 a markdown file; each task under a `## Task N: <name>` heading containing its
 complete requirements; binding cross-task requirements (exact values, formats,
 "same layout as X" relationships) in a `## Global Constraints` section.
 
-Then **review the plan as the senior engineer in the room.** Read it against
+Then **pressure-test it as the senior engineer in the room.** Read it against
 the actual codebase — open the files it proposes to touch, check that its
 assumptions about existing structure hold. Hunt for:
 
@@ -120,17 +127,19 @@ assumptions about existing structure hold. Hunt for:
 - Architectural choices that will age badly or fight existing patterns
 - A test strategy that wouldn't actually catch the bugs that matter here
 
-Send your critique back and iterate until the plan is genuinely sound — not
-just until OpenCode stops pushing back. A few rounds here is cheaper than
-discovering a design hole after the code is written. When it's solid, say so
-explicitly.
+Revise until the plan is genuinely sound — a few rounds here is cheaper than
+discovering a design hole after the code is written. Then show the user the
+plan and get their go-ahead before Task 1: a plan you wrote yourself needs a
+second pair of eyes.
 
 ## Pre-flight plan review
 
 Before dispatching Task 1, scan the plan once for conflicts: tasks that
 contradict each other or the Global Constraints, and anything the plan
 explicitly mandates that the review rubric treats as a defect (a test that
-asserts nothing, verbatim duplication of a logic block). Present everything
+asserts nothing, verbatim duplication of a logic block), and task sections
+that lean on context they don't contain — the implementer's first turn sees
+only its own section, the Global Constraints, and the code. Present everything
 you find to the user as one batched question — each finding beside the plan
 text that mandates it, asking which governs. If the scan is clean, proceed
 without comment.
@@ -142,46 +151,42 @@ main/master without explicit user consent.
 
 For each task, in order:
 
-1. **Record BASE**: `git rev-parse HEAD`. Reviews diff BASE..HEAD — never
-   `HEAD~1`, which silently drops all but the last commit of a multi-commit
-   task.
-2. **Extract the brief**: run this skill's `scripts/task-brief PLAN_FILE N` —
-   it writes the task's full text to a file and prints the path. The brief is
-   the single source of requirements; never paste task text into the dispatch.
-3. **Dispatch a fresh OpenCode session** using
-   [opencode-implementer-prompt.md](opencode-implementer-prompt.md): brief
-   path, scene-setting context, working directory, report-file path
-   (brief `…/task-N-brief.md` → report `…/task-N-report.md`). Fire async,
-   poll while you prep the review.
-4. **Handle the status** it replies with:
+1. **Dispatch** the task's first turn with `oc-dispatch` (see above). The
+   brief it extracts is the single source of requirements; never paste task
+   text into a follow-up. The result's `base` and `head` are the review range
+   — never `HEAD~1`, which silently drops all but the last commit of a
+   multi-commit task.
+2. **Handle the status**:
    - **DONE** → proceed to review.
-   - **DONE_WITH_CONCERNS** → read the concerns. Correctness or scope
-     concerns get addressed before review; observations get noted and you
-     proceed.
-   - **NEEDS_CONTEXT** → answer the questions in the same session; it
-     continues.
-   - **BLOCKED** → if it's a context problem, provide more context in the
-     same session. If the task is too large, split it into smaller pieces and
-     dispatch each. If the plan itself is wrong, escalate to the user. Never
-     ignore an escalation or push the implementer to retry without changing
-     something.
-5. **Review**: run `scripts/review-package BASE HEAD` (prints the diff-file
-   path; the package never enters your context), then dispatch a reviewer
-   subagent per [task-reviewer-prompt.md](task-reviewer-prompt.md)
-   with the brief, report, and package paths plus the Global Constraints
+   - **DONE_WITH_CONCERNS** → read `concerns`. Correctness or scope concerns
+     get addressed before review; observations get noted and you proceed.
+   - **NEEDS_CONTEXT** → write answers to its `questions` into a message file
+     (e.g. `.sdd/task-N-msg.md`) and run a follow-up turn; it continues.
+   - **BLOCKED** → if it's a context problem, provide more context in a
+     follow-up turn. If the task is too large, split it into smaller pieces
+     and dispatch each. If the plan itself is wrong, escalate to the user.
+     Never ignore an escalation or push the implementer to retry without
+     changing something.
+   - **ERROR** → see the ERROR rule above.
+3. **Review**: run `scripts/review-package BASE HEAD` with the result's `base`
+   and `head` (prints the diff-file path; the package never enters your
+   context), then dispatch a reviewer subagent per
+   [task-reviewer-prompt.md](task-reviewer-prompt.md) with the result's
+   `brief` and `report` paths, the package path, and the Global Constraints
    copied verbatim. When filling the template: no open-ended directives
    ("check all uses") without a concrete task-specific reason, no re-running
    tests the implementer already ran, and no pre-judging findings — if your
    prompt contains "do not flag" or "at most Minor", stop: let the reviewer
    raise it and adjudicate in the loop.
-6. **Act on the verdicts**:
-   - Critical/Important findings → send them into the same OpenCode session
-     as specific, actionable feedback: file:line, why it's a problem, what
-     good looks like. OpenCode fixes, re-runs the covering tests, and appends
-     results to its report file. Confirm the fix report names the covering
-     tests, the command run, and the output; then regenerate the review
-     package for the full BASE..HEAD range and re-review. Repeat until
-     approved — never skip the re-review.
+4. **Act on the verdicts**:
+   - Critical/Important findings → write them to a message file as specific,
+     actionable feedback (file:line, why it's a problem, what good looks
+     like) and run a follow-up turn. OpenCode fixes, re-runs the covering
+     tests, and rewrites its report. Confirm the new report names the
+     covering tests, the command run, and the output; then regenerate the
+     review package for the full `base..head` range (the follow-up's result
+     keeps the task's `base`) and re-review. Repeat until approved — never
+     skip the re-review.
    - Minor findings → record in the progress ledger for final-review triage.
      A roll-up nobody reads is a silent discard.
    - ⚠️ "Cannot verify from diff" items → resolve each yourself before
@@ -191,7 +196,12 @@ For each task, in order:
    - A finding labeled plan-mandated — or any finding that conflicts with the
      plan's text — is the user's decision: present the finding and the plan
      text, ask which governs.
-7. **Mark complete**: append to the ledger (see Durable progress) and update
+5. **Merge**: from the repo root on the working branch, `git merge --ff-only
+   oc/task-N`, then `git worktree remove "$wt"` and `git branch -d oc/task-N`.
+   The next task's worktree branches from HEAD, so HEAD must have this task's
+   commits. If the merge can't fast-forward, the working branch moved under
+   you — stop and ask the user.
+6. **Mark complete**: append to the ledger (see Durable progress) and update
    your todo list. Next task.
 
 ## Final whole-branch review
@@ -204,10 +214,13 @@ the full plan file in place of a single task brief, the package path, and the
 ledger's accumulated Minor findings so it can triage which must be fixed
 before merge.
 
-If it returns findings, dispatch **one** OpenCode fix session with the complete
-findings list — not one fixer per finding — then re-review. When clean, finish
-the branch with the user: merge to the base branch, open a pull request, or
-keep the branch — then clean up the `.sdd` workspace and any worktree.
+If it returns findings, fix them in **one** OpenCode session — not one fixer
+per finding: write `final-fixes.md` in the `.sdd` workspace with the plan's
+`## Global Constraints` section and a `## Task F: Final review fixes` section
+listing every finding, dispatch it as task `F`, merge it like any task, then
+re-review. When clean, finish the branch with the user: merge to the base
+branch, open a pull request, or keep the branch — then clean up the `.sdd`
+workspace and any leftover worktree (`git worktree list`).
 
 ## Durable progress
 
@@ -243,16 +256,20 @@ ran it and saw it pass); no unaddressed findings remain. Then summarize:
 **Never:**
 
 - Implement or patch code yourself — even when it would be faster
-- Silently fall back to implementing because the opencode-mcp server is absent
-- Dispatch with a blocking wait tool, or resend a permission-denied call verbatim
+- Fall back to implementing, or install OpenCode or jq yourself, because
+  `oc-dispatch` can't run — tell the user what's missing
+- Resend a permission-denied call verbatim, or retry an ERROR without
+  changing anything
 - Start implementation on main/master without explicit user consent
 - Skip the task review, or accept a review missing either verdict (spec
   compliance AND task quality)
 - Run multiple OpenCode implementation sessions in parallel (conflicts)
 - Carry one OpenCode session across tasks, or paste prior-task history into a
   dispatch
-- Make the implementer read the whole plan (hand it `scripts/task-brief`
-  output instead)
+- Paste task text or the whole plan into a follow-up message (the brief
+  already has the task)
+- Dispatch the next task before the previous task's branch is merged — its
+  worktree would start without that work
 - Dispatch a reviewer without a diff file — generate it first
   (`scripts/review-package BASE HEAD`)
 - Tell a reviewer what not to flag, or pre-rate a finding's severity
@@ -265,8 +282,8 @@ ran it and saw it pass); no unaddressed findings remain. Then summarize:
 
 ## Integration
 
-- Run the execution in an isolated workspace (a git worktree off the base
-  branch) — never on main/master.
+- Run the execution on a working branch, never main/master; `oc-dispatch`
+  gives each task its own worktree off it.
 - If your agent has a planning skill, have it structure the plan Phase 0
   produces; the format requirements above are what the machinery needs.
 - If your agent has its own code-review skill, its reviewer template can stand

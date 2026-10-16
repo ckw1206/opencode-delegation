@@ -1,8 +1,8 @@
 # opencode-delegation
 
 A skill for coding agents that delegates hands-on implementation to
-[OpenCode](https://opencode.ai) (via an opencode-mcp server, or headless via
-the `opencode` CLI) while the agent orchestrates: per-task dispatch with fresh
+[OpenCode](https://opencode.ai) (headless, via the `opencode` CLI) while the
+agent orchestrates: per-task dispatch with fresh
 OpenCode sessions, file handoffs (task brief → implementer report → review
 package), a per-task review gate run by a reviewer subagent (spec compliance +
 code quality), a durable progress ledger, and a final whole-branch review.
@@ -15,11 +15,10 @@ the work is called done.
 ## Layout
 
 - [SKILL.md](SKILL.md) — the skill itself (process, dispatch mechanics, red flags)
-- [opencode-implementer-prompt.md](opencode-implementer-prompt.md) — per-task message template for the OpenCode session
 - [task-reviewer-prompt.md](task-reviewer-prompt.md) — reviewer subagent template
 - `scripts/` — `task-brief`, `review-package`, `sdd-workspace` (bash)
 - `scripts/oc-dispatch` — runs one task headless via `opencode run` in its own
-  worktree and prints a JSON result; no MCP server needed
+  worktree and prints a JSON result
 - `.opencode/agents/implementer.md` — the restricted OpenCode agent
   `oc-dispatch` uses (no push, no cluster/SSH access, no `.env` reads)
 - `tests/oc-dispatch.sh` — self-check for `oc-dispatch` against a stub `opencode`
@@ -45,8 +44,9 @@ Requirements:
   the per-task review gate runs in one.
 - `bash` and `git` on the orchestrator's `PATH` (the helpers in `scripts/`);
   `oc-dispatch` also needs `jq`
-- [OpenCode](https://opencode.ai) reachable — either the `opencode` CLI
-  (the `oc-dispatch` flow) or the opencode-mcp server connected to the agent
-  (the MCP flow)
+- The [OpenCode](https://opencode.ai) CLI installed and logged in to a
+  provider (`opencode providers login`). The skill checks for `opencode` and
+  `jq` on its first dispatch and stops to tell you if either is missing; it
+  won't install them for you.
 - Keep the directory intact: `SKILL.md` runs the helpers in `scripts/`, and
   `oc-dispatch` loads the implementer agent from `.opencode/`
