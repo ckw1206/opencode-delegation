@@ -3,7 +3,7 @@
 A skill for coding agents that delegates hands-on implementation to
 [OpenCode](https://opencode.ai) (headless, via the `opencode` CLI) while the
 agent orchestrates: per-task dispatch with fresh
-OpenCode sessions, file handoffs (task brief → implementer report → review
+OpenCode sessions (independent tasks in parallel), file handoffs (task brief → implementer report → review
 package), a per-task review gate run by a reviewer subagent (spec compliance +
 code quality), a durable progress ledger, and a final whole-branch review.
 

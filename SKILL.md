@@ -11,7 +11,8 @@ description: >-
 
 # OpenCode Development Delegation
 
-Execute a plan by dispatching a fresh OpenCode session per task, a task review
+Execute a plan by dispatching a fresh OpenCode session per task — independent
+tasks in parallel — a task review
 (spec compliance + code quality) by a reviewer subagent after each, and
 a broad whole-branch review at the end.
 
@@ -116,6 +117,10 @@ implementation code; writing it is the controller's job.
 a markdown file; each task under a `## Task N: <name>` heading containing its
 complete requirements; binding cross-task requirements (exact values, formats,
 "same layout as X" relationships) in a `## Global Constraints` section.
+Each task also states `Depends on:` (the task numbers it needs merged first,
+or `none`) and `Files:` (what it creates or changes). Cut the work so most
+tasks depend on nothing and touch different files — independent tasks run in
+parallel, and a plan that is one long chain gives that up.
 
 Then **pressure-test it as the senior engineer in the room.** Read it against
 the actual codebase — open the files it proposes to touch, check that its
@@ -147,9 +152,18 @@ without comment.
 Also confirm you're on a working branch — never start implementation on
 main/master without explicit user consent.
 
-## Per-task loop
+## Execution in waves
 
-For each task, in order:
+Run the plan in waves of parallel tasks. A wave is every incomplete task whose
+dependencies are all merged and whose `Files:` overlap no other task in the
+wave, capped at 4 (cost and provider rate limits). Dispatch the whole wave at
+once — one `oc-dispatch` per task, each as its own background command — and
+take each task through the loop below **as soon as its dispatch returns**:
+don't hold the fastest task's review for the slowest task. Reviewer subagents
+run in parallel too. Start the next wave when every task in this one is
+merged. A strict chain of tasks simply runs one per wave.
+
+For each task:
 
 1. **Dispatch** the task's first turn with `oc-dispatch` (see above). The
    brief it extracts is the single source of requirements; never paste task
@@ -196,11 +210,14 @@ For each task, in order:
    - A finding labeled plan-mandated — or any finding that conflicts with the
      plan's text — is the user's decision: present the finding and the plan
      text, ask which governs.
-5. **Merge**: from the repo root on the working branch, `git merge --ff-only
-   oc/task-N`, then `git worktree remove "$wt"` and `git branch -d oc/task-N`.
-   The next task's worktree branches from HEAD, so HEAD must have this task's
-   commits. If the merge can't fast-forward, the working branch moved under
-   you — stop and ask the user.
+5. **Merge**, one task at a time even when tasks ran in parallel: from the
+   repo root on the working branch, `git merge --ff-only oc/task-N`, or
+   `git merge --no-ff --no-edit oc/task-N` when a wave-mate merged first.
+   Then `git worktree remove "$wt"` and `git branch -d oc/task-N`. On a
+   conflict, `git merge --abort`, remove the worktree, `git branch -D
+   oc/task-N`, correct the plan's `Files:` lines, and re-dispatch the task
+   fresh on top of the new HEAD. The next wave's worktrees branch from HEAD,
+   so HEAD must have every merged task's commits.
 6. **Mark complete**: append to the ledger (see Durable progress) and update
    your todo list. Next task.
 
@@ -263,13 +280,16 @@ ran it and saw it pass); no unaddressed findings remain. Then summarize:
 - Start implementation on main/master without explicit user consent
 - Skip the task review, or accept a review missing either verdict (spec
   compliance AND task quality)
-- Run multiple OpenCode implementation sessions in parallel (conflicts)
+- Put tasks in the same wave that depend on each other or share files, or
+  exceed 4 concurrent dispatches
 - Carry one OpenCode session across tasks, or paste prior-task history into a
   dispatch
 - Paste task text or the whole plan into a follow-up message (the brief
   already has the task)
-- Dispatch the next task before the previous task's branch is merged — its
-  worktree would start without that work
+- Start the next wave before every task in the current one is merged — its
+  worktrees would start without that work
+- Run a plan of independent tasks one at a time — waves exist so they don't
+  wait on each other
 - Dispatch a reviewer without a diff file — generate it first
   (`scripts/review-package BASE HEAD`)
 - Tell a reviewer what not to flag, or pre-rate a finding's severity
