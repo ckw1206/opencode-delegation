@@ -76,13 +76,16 @@ hands OpenCode the task's brief — its plan section plus the Global Constraints
 findings) into the same session; the task's base commit is kept. A resume turn
 starts a **new** session on the same worktree, branch and base: the implementer
 re-reads the brief, picks up from the task's commits, and gets MSG_FILE for
-whatever is still outstanding.
+whatever is still outstanding, with the instruction to take it one item at a
+time.
 
 Each call prints one JSON line: the implementer's report (`status`, `summary`,
 `files_changed`, `tests`, `guards`, `concerns`, `questions`) plus `session`,
-`base`, `head`, `commits`, `worktree`, `brief`, `report`, `events`, `usage`
-(`steps`, `input_tokens`, `output_tokens`, `peak_context`, `duration_s` for
-this turn) and `warnings`. Exit 0 = a real status; exit 1 = `status: ERROR`
+`base`, `head`, `commits`, `worktree`, `brief`, `report`, `events` (this
+turn's OpenCode event log; every turn keeps its own, numbered, and
+`.sdd/task-N-events.jsonl` links to the latest), `usage` (`steps`,
+`input_tokens`, `output_tokens`, `peak_context`, `duration_s` for this turn)
+and `warnings`. Exit 0 = a real status; exit 1 = `status: ERROR`
 with the cause in `.error` and its class in `.error_kind`; exit 2 = usage or
 setup error.
 
@@ -103,6 +106,13 @@ setup error.
   on the branch. Run a resume turn. Never send a follow-up into that session,
   and never discard the worktree and start over, which throws the committed
   work away. If the same task overflows twice, it is too big: split it.
+  `output_length` means one response hit the model's output limit, including
+  a run that simply stopped there without writing a report. The cause is
+  almost always long thinking, where the model plans every item before its
+  first edit, not a large write. The `events` file can't show it, because
+  OpenCode's JSON stream leaves out reasoning. So in the resume MSG_FILE,
+  name the one item to start with and tell it to grep and read in ranges,
+  instead of asking for smaller writes.
 - **Any other ERROR:** read `.error` (and the `events` file) before anything
   else. If it points at the provider or model, the user fixes that (`opencode
   providers login`) before you retry. Retry through a follow-up turn when
@@ -200,7 +210,9 @@ take each task through the loop below **as soon as its dispatch returns**:
 don't hold the fastest task's review for the slowest task. Reviewer subagents
 run in parallel too. Start the next wave when every task in this one is
 merged, after `scripts/oc-cleanup` has removed the wave's merged worktrees and
-branches (it never touches unmerged ones; `-n` lists without removing). A
+branches (it never touches unmerged ones, nor a task still in flight — a
+worktree with a running opencode process or no report yet; `-n` lists
+without removing). A
 strict chain of tasks simply runs one per wave.
 
 For each task:
