@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Remove the worktrees and branches of oc/task-* branches already merged into
+# the current branch, and list the ones that aren't. Over a long run, tasks
+# that were superseded, resumed or abandoned leave worktrees and branches
+# behind; this keeps them from piling up without touching unmerged work.
+#
+# Usage (run from the main repo, on the working branch):
+#   oc-cleanup      remove merged task worktrees and branches
+#   oc-cleanup -n   dry run: only list what would be removed and what is kept
+#
+# Never forces: a merged task's worktree with uncommitted changes is kept and
+# reported, and branches are deleted with `git branch -d` (merged only).
+set -euo pipefail
+
+dry=false
+case ${1:-} in
+  -n) dry=true ;;
+  "") ;;
+  *) echo "usage: oc-cleanup [-n]" >&2; exit 2 ;;
+esac
+git rev-parse --git-dir >/dev/null
+$dry || git worktree prune
+
+worktree_of() { # $1 = branch -> its worktree path, if checked out in one
+  git worktree list --porcelain |
+    awk -v ref="branch refs/heads/$1" '/^worktree / { w = substr($0, 10) } $0 == ref { print w }'
+}
+
+removed=0 kept=0
+for b in $(git branch --merged HEAD --format='%(refname:short)' --list 'oc/task-*'); do
+  w=$(worktree_of "$b")
+  if $dry; then
+    echo "would remove: $b${w:+ (worktree $w)}"
+    removed=$((removed + 1))
+    continue
+  fi
+  if [ -n "$w" ] && ! git worktree remove "$w" 2>/dev/null; then
+    echo "kept: $b (worktree $w has uncommitted changes)"
+    kept=$((kept + 1))
+    continue
+  fi
+  git branch -d -q "$b"
+  removed=$((removed + 1))
+done
+for b in $(git branch --no-merged HEAD --format='%(refname:short)' --list 'oc/task-*'); do
+  w=$(worktree_of "$b")
+  echo "not merged, kept: $b${w:+ (worktree $w)}"
+  kept=$((kept + 1))
+done
+if $dry; then
+  echo "would remove $removed merged task branch(es); would keep $kept"
+else
+  echo "removed $removed merged task branch(es); kept $kept"
+fi

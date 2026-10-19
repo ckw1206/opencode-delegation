@@ -6,9 +6,14 @@
 #   oc-dispatch PLAN_FILE TASK_N WORKTREE                      first turn
 #   oc-dispatch PLAN_FILE TASK_N WORKTREE SESSION_ID MSG_FILE  follow-up turn
 #                                       (answers to questions, review findings)
+#   oc-dispatch PLAN_FILE TASK_N WORKTREE --resume [MSG_FILE]  resume turn
+#                                       (a fresh session on the same worktree)
 #
 # The first turn creates WORKTREE on a new branch oc/task-N from HEAD, writes
-# the brief into WORKTREE/.sdd/ and records the task's base commit.
+# the brief into WORKTREE/.sdd/ and records the task's base commit. A resume
+# turn keeps the worktree, branch and base but starts a new session, for a
+# session that overflowed its context or is too full for another fix round;
+# MSG_FILE carries anything still outstanding (e.g. review findings).
 # OpenCode runs as the `implementer` agent shipped in ../.opencode/agents/.
 #
 # No timeout of its own. A task can outlast a tool call's timeout, so run it as
@@ -18,16 +23,26 @@
 #
 # Exit 0: result printed; read .status (DONE, DONE_WITH_CONCERNS, BLOCKED,
 #         NEEDS_CONTEXT). Exit 1: .status is ERROR (OpenCode failed or broke
-#         protocol; .error says why). Exit 2: usage or setup error.
+#         protocol; .error says why, .error_kind classifies it). Exit 2: usage
+#         or setup error.
 set -euo pipefail
 
-[ $# -eq 3 ] || [ $# -eq 5 ] || {
-  echo "usage: oc-dispatch PLAN_FILE TASK_N WORKTREE [SESSION_ID MSG_FILE]" >&2
+usage() {
+  echo "usage: oc-dispatch PLAN_FILE TASK_N WORKTREE [SESSION_ID MSG_FILE | --resume [MSG_FILE]]" >&2
   exit 2
 }
+[ $# -ge 3 ] && [ $# -le 5 ] || usage
+mode=first sid="" msgfile=""
+if [ "${4:-}" = --resume ]; then
+  mode=resume msgfile=${5:-}
+elif [ $# -eq 5 ]; then
+  mode=followup sid=$4 msgfile=$5
+elif [ $# -ne 3 ]; then
+  usage
+fi
 [ -f "$1" ] || { echo "no such plan file: $1" >&2; exit 2; }
 plan=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
-n=$2 wt=$3 sid=${4:-} msgfile=${5:-}
+n=$2 wt=$3
 here=$(cd "$(dirname "$0")" && pwd)
 branch="oc/task-$n"
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
@@ -37,43 +52,86 @@ command -v opencode >/dev/null || { echo "opencode is not on PATH" >&2; exit 2; 
 # fall back to its allow-everything default agent, so refuse to start unless
 # the implementer agent resolves.
 export OPENCODE_CONFIG_DIR="$here/../.opencode"
-agents=$(opencode agent list 2>/dev/null || true)
+# The agent-list probe is flaky while other opencode processes are running
+# (agent loading races), so retry and keep the last output for the error.
+agents="" alist_err=""
+for attempt in $(seq 1 20); do
+  agents=$(opencode agent list 2>&1) || true
+  grep -q '^implementer ' <<< "$agents" && break
+  alist_err=$(tail -3 <<< "$agents" | tr '\n' ' ')
+  [ "$attempt" -lt 20 ] && sleep 2
+done
 grep -q '^implementer ' <<< "$agents" ||
-  { echo "opencode cannot load the implementer agent from $OPENCODE_CONFIG_DIR" >&2; exit 2; }
+  { echo "opencode cannot load the implementer agent from $OPENCODE_CONFIG_DIR (last output: ${alist_err:0:200})" >&2; exit 2; }
 
-if [ -z "$sid" ]; then
-  [ ! -e "$wt" ] || { echo "worktree $wt already exists; follow-up turns need SESSION_ID MSG_FILE" >&2; exit 2; }
+# A model defined in the user's own provider config without `limit` is one
+# OpenCode cannot compact for: its sessions grow until the provider rejects
+# the request (ContextOverflowError). Warn, don't refuse; best effort.
+warnings=""
+unlimited=$(opencode debug config 2>/dev/null | jq -r '
+  (.agent.implementer.model // .model // "") as $m
+  | ($m | index("/")) as $i
+  | if $i == null then empty
+    else (.provider[$m[:$i]].models[$m[$i + 1:]] // null) as $def
+      | if $def != null and $def.limit == null then $m else empty end
+    end' 2>/dev/null || true)
+[ -z "$unlimited" ] ||
+  warnings+="model $unlimited declares no limit (context/output) in its provider config, so OpenCode cannot compact before the context window overflows"$'\n'
+
+if [ "$mode" = first ]; then
+  [ ! -e "$wt" ] || { echo "worktree $wt already exists; follow-up turns need SESSION_ID MSG_FILE, resume turns --resume" >&2; exit 2; }
   ! git show-ref --verify --quiet "refs/heads/$branch" ||
     { echo "branch $branch already exists; remove it or continue its session" >&2; exit 2; }
   "$here/task-brief" "$plan" "$n" /dev/null >/dev/null # fail before creating anything
   git worktree add -q -b "$branch" "$wt" HEAD
 else
-  [ -d "$wt" ] || { echo "no worktree at $wt for follow-up turn" >&2; exit 2; }
-  [ -f "$msgfile" ] || { echo "no such message file: $msgfile" >&2; exit 2; }
+  [ -d "$wt" ] || { echo "no worktree at $wt for a $mode turn" >&2; exit 2; }
+  [ -z "$msgfile" ] || [ -f "$msgfile" ] || { echo "no such message file: $msgfile" >&2; exit 2; }
 fi
 wt=$(cd "$wt" && pwd)
 sdd=$(cd "$wt" && "$here/sdd-workspace")
 brief=$sdd/task-$n-brief.md
 report=$sdd/task-$n-report.json
 events=$sdd/task-$n-events.jsonl
+[ "$mode" = first ] || [ -f "$sdd/task-$n-base" ] ||
+  { echo "no recorded base for task $n in $sdd; was it dispatched with oc-dispatch?" >&2; exit 2; }
 
 args=(run --agent implementer --format json --dir "$wt")
-if [ -z "$sid" ]; then
-  "$here/task-brief" "$plan" "$n" "$brief" >/dev/null
-  git -C "$wt" rev-parse HEAD > "$sdd/task-$n-base"
-  args+=(--title "task-$n" "Task $n. BRIEF: $brief REPORT: $report")
-else
-  args+=(--session "$sid" "$(cat "$msgfile")
+case $mode in
+  first)
+    "$here/task-brief" "$plan" "$n" "$brief" >/dev/null
+    git -C "$wt" rev-parse HEAD > "$sdd/task-$n-base"
+    args+=(--title "task-$n" "Task $n. BRIEF: $brief REPORT: $report") ;;
+  followup)
+    args+=(--session "$sid" "$(cat "$msgfile")
 
-When done, rewrite REPORT: $report")
-fi
+When done, rewrite REPORT: $report") ;;
+  resume)
+    # The plan may have been corrected since the first turn; the new session
+    # reads the brief afresh.
+    "$here/task-brief" "$plan" "$n" "$brief" >/dev/null
+    msg="Task $n. BRIEF: $brief REPORT: $report
+RESUME: an earlier session on this task stopped before finishing. Base commit: $(cat "$sdd/task-$n-base"). Start from its commits and this worktree as it is."
+    [ -z "$msgfile" ] || msg+="
+
+$(cat "$msgfile")"
+    args+=(--title "task-$n-resume" "$msg") ;;
+esac
 rm -f "$report" # a stale report must never pass for this turn's result
 
-rc=0
+rc=0 SECONDS=0
 opencode "${args[@]}" < /dev/null > "$events" 2> "$sdd/task-$n-stderr.log" || rc=$?
 
 sid=$(jq -rn '[inputs | .sessionID // empty][0] // empty' "$events" 2>/dev/null || true)
 err=$(jq -rn '[inputs | select(.type == "error") | .error.data.message // .error.name // "error event"][0] // empty' "$events" 2>/dev/null || true)
+err_name=$(jq -rn '[inputs | select(.type == "error") | .error.name // empty][0] // empty' "$events" 2>/dev/null || true)
+usage=$(jq -cn --argjson secs "$SECONDS" '
+  [inputs | select(.type == "step_finish") | .part.tokens // {}]
+  | {steps: length,
+     input_tokens: (map(.input // 0) | add // 0),
+     output_tokens: (map(.output // 0) | add // 0),
+     peak_context: (map((.input // 0) + (.cache.read // 0)) | max // 0),
+     duration_s: $secs}' "$events" 2>/dev/null || echo null)
 base=$(cat "$sdd/task-$n-base")
 head=$(git -C "$wt" rev-parse HEAD)
 on=$(git -C "$wt" symbolic-ref --short -q HEAD || echo detached)
@@ -84,13 +142,25 @@ result() { # $1 = JSON object to extend with the dispatch facts
   jq -c --arg session "$sid" --arg branch "$on" --arg base "$base" --arg head "$head" \
     --argjson commits "$commits" --argjson dirty "$dirty" --arg worktree "$wt" \
     --arg brief "$brief" --arg report "$report" --arg events "$events" \
+    --argjson usage "$usage" --argjson warnings "$(jq -Rn '[inputs | select(length > 0)]' <<< "$warnings")" \
     '. + {session: $session, branch: $branch, base: $base, head: $head, commits: $commits,
-          dirty: $dirty, worktree: $worktree, brief: $brief, report: $report, events: $events}' <<< "$1"
+          dirty: $dirty, worktree: $worktree, brief: $brief, report: $report, events: $events,
+          usage: $usage, warnings: $warnings}' <<< "$1"
 }
-fail() { result "$(jq -n --arg e "$1" '{status: "ERROR", error: $e}')"; exit 1; }
+fail() { # $1 = message, $2 = error_kind
+  result "$(jq -n --arg e "$1" --arg k "${2:-other}" \
+    '{status: "ERROR", error: $e, error_kind: $k}
+     + if $k == "context_overflow" or $k == "output_length" then {resumable: true} else {} end')"
+  exit 1
+}
+case $err_name in
+  ContextOverflowError) kind=context_overflow ;;
+  MessageOutputLengthError) kind=output_length ;;
+  *) kind=other ;;
+esac
 
-[ "$rc" -eq 0 ] || fail "opencode exited $rc: ${err:-see $sdd/task-$n-stderr.log}"
-[ -z "$err" ] || fail "$err"
+[ "$rc" -eq 0 ] || fail "opencode exited $rc: ${err:-see $sdd/task-$n-stderr.log}" "$kind"
+[ -z "$err" ] || fail "$err" "$kind"
 [ "$on" = "$branch" ] || fail "worktree left branch $branch (now on $on)"
 [ -s "$report" ] || fail "no report written to $report"
 status=$(jq -r 'if type == "object" then .status else empty end' "$report" 2>/dev/null || true)
