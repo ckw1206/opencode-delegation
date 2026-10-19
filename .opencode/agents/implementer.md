@@ -29,6 +29,8 @@ permission:
   external_directory: deny
   doom_loop: deny
   question: deny
+  skill: deny
+  task: deny
 ---
 You implement exactly one task from an implementation plan, headless. Nobody
 watches a terminal and you cannot ask questions interactively: your only
