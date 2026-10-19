@@ -48,6 +48,9 @@ case $STUB_MODE in
   blocked) echo '{"status":"BLOCKED","concerns":["stuck"]}' > "$report" ;;
   badjson) echo 'not json' > "$report" ;;
   noreport) ;;
+  length) # cut off at the output limit: opencode exits 0 without an error event
+    echo '{"type":"step_finish","part":{"reason":"tool-calls","tokens":{"input":100,"output":10}}}'
+    echo '{"type":"step_finish","part":{"reason":"length","tokens":{"input":100,"output":32000}}}' ;;
 esac
 EOF
 chmod +x "$tmp/bin/opencode"
@@ -88,7 +91,8 @@ grep -q 'PORT=8080' "$(field brief)" && grep -q '^## Task 2' "$(field brief)" &&
 cfg=$(sed -n 's/^config_dir=//p' "$STUB_LOG")
 [ -f "$cfg/agents/implementer.md" ] && grep -q -- '--agent implementer' "$STUB_LOG" &&
   pass "implementer agent dir passed via OPENCODE_CONFIG_DIR" || die "config dir: $cfg"
-base2=$(field base)
+base2=$(field base) ev2=$(field events)
+cp "$ev2" "$tmp/ev2"
 
 run nocommit plan.md 3 wt3
 [ "$rc" -eq 1 ] && [[ "$(field error)" == *"no commits"* ]] && pass "DONE without commits -> ERROR" || die "nocommit: $out"
@@ -107,6 +111,9 @@ run done plan.md 2 wt2 ses_stub "$tmp/fix.md"
 [ "$rc" -eq 0 ] && [ "$(field commits)" = 2 ] && [ "$(field base)" = "$base2" ] &&
   grep -q -- '--session ses_stub' "$STUB_LOG" && grep -q 'off-by-one' "$STUB_LOG" &&
   pass "follow-up turn reuses session, worktree and base" || die "follow-up: $out"
+[ "$(field events)" != "$ev2" ] && cmp -s "$ev2" "$tmp/ev2" && [ wt2/.sdd/task-2-events.jsonl -ef "$(field events)" ] &&
+  [ -e wt2/.sdd/task-2-stderr.1.log ] && [ -e wt2/.sdd/task-2-stderr.2.log ] &&
+  pass "follow-up turn logs to its own files; earlier turn's events kept" || die "follow-up events: $out"
 
 run noreport plan.md 2 wt2 ses_stub "$tmp/fix.md"
 [ "$rc" -eq 1 ] && [[ "$(field error)" == *"no report"* ]] && pass "stale report never reused" || die "stale: $out"
@@ -128,7 +135,7 @@ run overflow plan.md 10 wt10
 [ "$rc" -eq 1 ] && [ "$(field status)" = ERROR ] && [ "$(field error_kind)" = context_overflow ] &&
   [ "$(field resumable)" = true ] && [ "$(field commits)" = 1 ] &&
   pass "context overflow -> ERROR context_overflow, resumable, commits kept" || die "overflow: $out"
-base10=$(field base)
+base10=$(field base) ev10=$(field events)
 
 echo "still open: the off-by-one at work.txt:1" > "$tmp/resume.md"
 run done plan.md 10 wt10 --resume "$tmp/resume.md"
@@ -136,6 +143,19 @@ run done plan.md 10 wt10 --resume "$tmp/resume.md"
   ! grep -q -- '--session' "$STUB_LOG" && grep -q 'RESUME' "$STUB_LOG" && grep -q "$base10" "$STUB_LOG" &&
   grep -q 'still open' "$STUB_LOG" && grep -q 'REPORT: ' "$STUB_LOG" &&
   pass "resume starts a fresh session on the same worktree and base" || die "resume: $out"
+[ "$(field events)" != "$ev10" ] && grep -q ContextOverflowError "$ev10" &&
+  [ wt10/.sdd/task-10-events.jsonl -ef "$(field events)" ] &&
+  pass "resume turn logs to its own file; the overflowed turn's events kept" || die "resume events: $out"
+
+grep -q 'one item at a time' "$STUB_LOG" && pass "resume asks for one item at a time" || die "resume item rule"
+
+rm wt10/.sdd/task-10-events.jsonl && echo legacy > wt10/.sdd/task-10-events.jsonl # logged before turns were numbered
+run length plan.md 10 wt10 --resume
+[ "$rc" -eq 1 ] && [ "$(field error_kind)" = output_length ] && [ "$(field resumable)" = true ] &&
+  [[ "$(field error)" == *"output limit"* ]] && pass "output-length stop without report -> output_length, resumable" ||
+  die "length: $out"
+grep -q legacy wt10/.sdd/task-10-events.0.jsonl && [ wt10/.sdd/task-10-events.jsonl -ef "$(field events)" ] &&
+  pass "un-numbered events file from before is kept" || die "legacy events: $(ls wt10/.sdd)"
 
 run done plan.md 11 wt11 --resume 2>/dev/null
 [ "$rc" -eq 2 ] && [ ! -e wt11 ] && pass "resume without a worktree -> exit 2" || die "resume no wt: rc=$rc"

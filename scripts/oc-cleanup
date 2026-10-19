@@ -9,7 +9,10 @@
 #   oc-cleanup -n   dry run: only list what would be removed and what is kept
 #
 # Never forces: a merged task's worktree with uncommitted changes is kept and
-# reported, and branches are deleted with `git branch -d` (merged only).
+# reported, and branches are deleted with `git branch -d` (merged only). A task
+# still in flight is kept too: its worktree has a running opencode process, or
+# no report yet. A branch with no commits counts as merged, so this is what
+# protects a task that has not committed anything.
 set -euo pipefail
 
 dry=false
@@ -26,9 +29,27 @@ worktree_of() { # $1 = branch -> its worktree path, if checked out in one
     awk -v ref="branch refs/heads/$1" '/^worktree / { w = substr($0, 10) } $0 == ref { print w }'
 }
 
+# oc-dispatch runs opencode with `--dir WORKTREE` (absolute path); one snapshot
+# of the process table, each line ending in a space so a match can't run on
+# into a longer path.
+procs=$(ps -axww -o command= | sed 's/$/ /')
+in_flight() { # $1 = branch, $2 = its worktree -> why it is in flight, if it is
+  if grep -qF -- "--dir $2 " <<< "$procs"; then
+    echo "has a running opencode process"
+  elif [ ! -s "$2/.sdd/task-${1#oc/task-}-report.json" ]; then
+    echo "has no report yet"
+  fi
+}
+
 removed=0 kept=0
 for b in $(git branch --merged HEAD --format='%(refname:short)' --list 'oc/task-*'); do
   w=$(worktree_of "$b")
+  why=${w:+$(in_flight "$b" "$w")}
+  if [ -n "$why" ]; then
+    echo "kept: $b (worktree $w $why)"
+    kept=$((kept + 1))
+    continue
+  fi
   if $dry; then
     echo "would remove: $b${w:+ (worktree $w)}"
     removed=$((removed + 1))

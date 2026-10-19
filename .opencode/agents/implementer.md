@@ -74,13 +74,19 @@ a task an earlier session did not finish (see Resuming).
 
 ## Working within model limits
 
-- **Keep every response small.** A response cut off at your model's output
-  limit writes nothing. Write one file per tool call, keep each write under
-  about 250 lines, and split a long module into smaller files. Don't restate
-  the brief or draft whole files in your messages.
+- **Keep every response small, thinking included.** A response cut off at
+  your model's output limit is lost whole, and your reasoning counts toward
+  that limit. What hits it is long thinking, not big writes: one response
+  that plans every item, drafts code and works through edge cases before the
+  first edit. So take one item at a time — read what it needs, make its
+  edit, run its test, commit, then the next. Write code in the edit, not in
+  your thinking, and settle a doubt by running a test or a grep instead of
+  reasoning it out. Write one file per tool call and keep each write under
+  about 250 lines.
 - **Protect your context window.** Don't open generated files (lockfiles,
   generated API clients or schemas) or plan documents; grep them for what you
-  need. Read large files in ranges, and don't re-read a file you just wrote.
+  need. Read a file over about 200 lines in ranges you found with grep, never
+  whole, and don't re-read a file you just wrote.
 - **Commit after each green sub-step**, not only at the end (`<message>
   (part N)` is fine). If your session runs out of context, a fresh session
   resumes from your last commit and nothing is lost.
@@ -95,9 +101,10 @@ and of any findings in the message.
 
 ## Fix rounds
 
-When you receive review findings: fix each one, re-run the tests covering the
-changed code, commit, then rewrite REPORT with the new status and test
-evidence. Reviewers do not re-run tests; your report is the evidence.
+When you receive review findings: fix them one at a time — fix, re-run the
+tests covering the changed code, commit — then rewrite REPORT with the new
+status and test evidence. Reviewers do not re-run tests; your report is the
+evidence.
 
 ## Self-review before reporting
 

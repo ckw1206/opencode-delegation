@@ -88,11 +88,16 @@ else
   [ -d "$wt" ] || { echo "no worktree at $wt for a $mode turn" >&2; exit 2; }
   [ -z "$msgfile" ] || [ -f "$msgfile" ] || { echo "no such message file: $msgfile" >&2; exit 2; }
 fi
-wt=$(cd "$wt" && pwd)
+wt=$(cd "$wt" && pwd -P) # the path `git worktree list` shows; oc-cleanup matches --dir on it
 sdd=$(cd "$wt" && "$here/sdd-workspace")
 brief=$sdd/task-$n-brief.md
 report=$sdd/task-$n-report.json
-events=$sdd/task-$n-events.jsonl
+# Each turn logs to its own numbered files, so a later turn never overwrites
+# the evidence of an earlier one; task-N-events.jsonl links to the latest.
+turn=1
+while [ -e "$sdd/task-$n-events.$turn.jsonl" ]; do turn=$((turn + 1)); done
+events=$sdd/task-$n-events.$turn.jsonl stderr=$sdd/task-$n-stderr.$turn.log
+latest=$sdd/task-$n-events.jsonl
 [ "$mode" = first ] || [ -f "$sdd/task-$n-base" ] ||
   { echo "no recorded base for task $n in $sdd; was it dispatched with oc-dispatch?" >&2; exit 2; }
 
@@ -111,20 +116,25 @@ When done, rewrite REPORT: $report") ;;
     # reads the brief afresh.
     "$here/task-brief" "$plan" "$n" "$brief" >/dev/null
     msg="Task $n. BRIEF: $brief REPORT: $report
-RESUME: an earlier session on this task stopped before finishing. Base commit: $(cat "$sdd/task-$n-base"). Start from its commits and this worktree as it is."
+RESUME: an earlier session on this task stopped before finishing. Base commit: $(cat "$sdd/task-$n-base"). Start from its commits and this worktree as it is.
+Take what is left one item at a time: read only what that item needs (grep, then line ranges), edit, test, commit, then the next. Don't plan every item before your first edit."
     [ -z "$msgfile" ] || msg+="
 
 $(cat "$msgfile")"
     args+=(--title "task-$n-resume" "$msg") ;;
 esac
 rm -f "$report" # a stale report must never pass for this turn's result
+# A regular file there is a turn logged before turns were numbered: keep it.
+[ -L "$latest" ] || [ ! -e "$latest" ] || mv "$latest" "$sdd/task-$n-events.0.jsonl"
+ln -sf "${events##*/}" "$latest"
 
 rc=0 SECONDS=0
-opencode "${args[@]}" < /dev/null > "$events" 2> "$sdd/task-$n-stderr.log" || rc=$?
+opencode "${args[@]}" < /dev/null > "$events" 2> "$stderr" || rc=$?
 
 sid=$(jq -rn '[inputs | .sessionID // empty][0] // empty' "$events" 2>/dev/null || true)
 err=$(jq -rn '[inputs | select(.type == "error") | .error.data.message // .error.name // "error event"][0] // empty' "$events" 2>/dev/null || true)
 err_name=$(jq -rn '[inputs | select(.type == "error") | .error.name // empty][0] // empty' "$events" 2>/dev/null || true)
+last_finish=$(jq -rn '[inputs | select(.type == "step_finish") | .part.reason // empty] | last // empty' "$events" 2>/dev/null || true)
 usage=$(jq -cn --argjson secs "$SECONDS" '
   [inputs | select(.type == "step_finish") | .part.tokens // {}]
   | {steps: length,
@@ -159,10 +169,16 @@ case $err_name in
   *) kind=other ;;
 esac
 
-[ "$rc" -eq 0 ] || fail "opencode exited $rc: ${err:-see $sdd/task-$n-stderr.log}" "$kind"
+[ "$rc" -eq 0 ] || fail "opencode exited $rc: ${err:-see $stderr}" "$kind"
 [ -z "$err" ] || fail "$err" "$kind"
 [ "$on" = "$branch" ] || fail "worktree left branch $branch (now on $on)"
-[ -s "$report" ] || fail "no report written to $report"
+if [ ! -s "$report" ]; then
+  # A response cut off at the output limit ends the run quietly (exit 0, no
+  # error event); only the last step_finish's reason says so.
+  [ "$last_finish" != length ] ||
+    fail "the last response stopped at the model's output limit before a report was written" output_length
+  fail "no report written to $report"
+fi
 status=$(jq -r 'if type == "object" then .status else empty end' "$report" 2>/dev/null || true)
 case $status in
   DONE | DONE_WITH_CONCERNS) [ "$commits" -gt 0 ] || fail "status $status but no commits in $base..$head" ;;
