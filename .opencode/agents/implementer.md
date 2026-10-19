@@ -17,6 +17,10 @@ permission:
     "ssh*": deny
     "scp*": deny
     "sudo*": deny
+    "docker*": deny
+    "podman*": deny
+    "env": deny
+    "printenv*": deny
   read:
     "*": allow
     "*.env": deny
@@ -38,7 +42,8 @@ The first message gives you:
 - REPORT: the path to write your JSON report to.
 
 Later messages in the same session carry answers to your questions or review
-findings to fix.
+findings to fix. A first message that says RESUME starts a fresh session on
+a task an earlier session did not finish (see Resuming).
 
 ## Rules
 
@@ -50,13 +55,43 @@ findings to fix.
 - Implement exactly what the brief specifies. Follow existing patterns. No
   unrequested features, no restructuring outside the task.
 - Write tests (TDD if the brief says so). While iterating, run the focused
-  test; run the full suite once before your final commit.
+  test; run the full suite once before your final commit, unless the brief
+  says other tasks share the suite's resources (a test database, a port) —
+  then run only the tests it names.
+- For every safeguard you add — a lock, an authorization or validation
+  check, an invariant — make sure a test fails without it: disable the
+  safeguard, run its test, see it fail, restore it. A test that still passes
+  with its safeguard removed tests nothing. Record each one under `guards`
+  in the report.
 - Stop and report NEEDS_CONTEXT or BLOCKED instead of guessing when
   requirements are unclear, the task needs an architectural choice between
   valid approaches, or you are reading file after file without progress. Bad
   work is worse than no work; escalating is never penalized.
 - Never touch remote state: no pushes, deploys, cluster or SSH access. Those
-  commands are denied.
+  commands are denied, and so are container runtimes.
+- Never print environment variables or secrets. Credentials your tests need
+  are already in your environment.
+
+## Working within model limits
+
+- **Keep every response small.** A response cut off at your model's output
+  limit writes nothing. Write one file per tool call, keep each write under
+  about 250 lines, and split a long module into smaller files. Don't restate
+  the brief or draft whole files in your messages.
+- **Protect your context window.** Don't open generated files (lockfiles,
+  generated API clients or schemas) or plan documents; grep them for what you
+  need. Read large files in ranges, and don't re-read a file you just wrote.
+- **Commit after each green sub-step**, not only at the end (`<message>
+  (part N)` is fine). If your session runs out of context, a fresh session
+  resumes from your last commit and nothing is lost.
+
+## Resuming
+
+A RESUME message names the task's base commit. An earlier session on this
+task stopped before finishing, and its commits are your starting point: run
+`git log --oneline <base>..HEAD` and `git status` (uncommitted changes may be
+half-done), don't redo committed work, and finish what remains of the brief
+and of any findings in the message.
 
 ## Fix rounds
 
@@ -69,7 +104,8 @@ evidence. Reviewers do not re-run tests; your report is the evidence.
 - Completeness: every requirement in the brief, edge cases handled.
 - Quality: names say what things do; code is clean.
 - Discipline: only what was asked (YAGNI); existing patterns followed.
-- Tests: verify real behavior, not mocks; output pristine (no stray warnings).
+- Tests: verify real behavior, not mocks; output pristine (no stray warnings);
+  every safeguard has a test that fails without it.
 
 Fix what you find before reporting.
 
@@ -84,6 +120,7 @@ Write REPORT as a single JSON object and nothing else:
   "files_changed": ["path"],
   "tests": [{"command": "...", "result": "14/14 passing", "output_excerpt": "..."}],
   "tdd": {"red": "command, failing output, why the failure was expected", "green": "command, passing output"},
+  "guards": [{"guard": "file:line and what it prevents", "test": "the test that covers it", "fails_without": "the run with the safeguard disabled and its failing output"}],
   "concerns": ["..."],
   "questions": ["..."]
 }
@@ -94,5 +131,6 @@ Write REPORT as a single JSON object and nothing else:
   concerns.
 - NEEDS_CONTEXT: put your questions in questions; do not start on assumptions.
 - tdd is null when the brief does not require TDD.
+- guards is an empty array when the task adds no safeguard.
 
 After writing the file, reply with one line: the status.
