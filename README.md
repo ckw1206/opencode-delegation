@@ -24,7 +24,9 @@ the work is called done.
   unmerged ones
 - `.opencode/agents/implementer.md` — the restricted OpenCode agent
   `oc-dispatch` uses (no push, no cluster/SSH or container-runtime access, no
-  `.env` reads, no printing its environment)
+  `.env` reads, no printing its environment, no skills or subagents)
+- `.opencode/AGENTS.md` — the implementer's global instructions, in place of
+  OpenCode's fallback to the user's `~/.claude/CLAUDE.md`
 - `tests/oc-dispatch.sh`, `tests/oc-cleanup.sh` — self-checks (`oc-dispatch`
   runs against a stub `opencode`)
 

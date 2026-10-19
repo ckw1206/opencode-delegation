@@ -58,7 +58,7 @@ ambiguity that genuinely prevents progress, or all tasks complete.
 OpenCode runs headless through `scripts/oc-dispatch`, one task per call, as
 the restricted `implementer` agent shipped in `.opencode/agents/` (no pushes,
 no cluster, SSH or container-runtime access, no `.env` reads, no printing its
-environment). It cannot ask questions
+environment, no skills or subagents). It cannot ask questions
 interactively; it reports NEEDS_CONTEXT instead. Run it from the user's repo
 root, on the working branch:
 
