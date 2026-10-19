@@ -57,7 +57,8 @@ ambiguity that genuinely prevents progress, or all tasks complete.
 
 OpenCode runs headless through `scripts/oc-dispatch`, one task per call, as
 the restricted `implementer` agent shipped in `.opencode/agents/` (no pushes,
-no cluster or SSH access, no `.env` reads). It cannot ask questions
+no cluster, SSH or container-runtime access, no `.env` reads, no printing its
+environment). It cannot ask questions
 interactively; it reports NEEDS_CONTEXT instead. Run it from the user's repo
 root, on the working branch:
 
@@ -66,18 +67,29 @@ SKILL=/path/to/this/skill   # the directory containing this SKILL.md
 wt="$("$SKILL/scripts/sdd-workspace")/wt/task-N"
 "$SKILL/scripts/oc-dispatch" PLAN_FILE N "$wt"                      # first turn
 "$SKILL/scripts/oc-dispatch" PLAN_FILE N "$wt" SESSION_ID MSG_FILE  # follow-up
+"$SKILL/scripts/oc-dispatch" PLAN_FILE N "$wt" --resume [MSG_FILE]  # resume
 ```
 
 The first turn creates the worktree on a new branch `oc/task-N` from HEAD and
 hands OpenCode the task's brief — its plan section plus the Global Constraints
 — and nothing else. A follow-up turn sends MSG_FILE (your answers, or review
-findings) into the same session; the task's base commit is kept.
+findings) into the same session; the task's base commit is kept. A resume turn
+starts a **new** session on the same worktree, branch and base: the implementer
+re-reads the brief, picks up from the task's commits, and gets MSG_FILE for
+whatever is still outstanding.
 
 Each call prints one JSON line: the implementer's report (`status`, `summary`,
-`files_changed`, `tests`, `concerns`, `questions`) plus `session`, `base`,
-`head`, `commits`, `worktree`, `brief`, `report`, `events`. Exit 0 = a real
-status; exit 1 = `status: ERROR` with the cause in `.error`; exit 2 = usage or
+`files_changed`, `tests`, `guards`, `concerns`, `questions`) plus `session`,
+`base`, `head`, `commits`, `worktree`, `brief`, `report`, `events`, `usage`
+(`steps`, `input_tokens`, `output_tokens`, `peak_context`, `duration_s` for
+this turn) and `warnings`. Exit 0 = a real status; exit 1 = `status: ERROR`
+with the cause in `.error` and its class in `.error_kind`; exit 2 = usage or
 setup error.
+
+- **Read `warnings` on the first dispatch.** A warning that the model declares
+  no limit means OpenCode can't compact before its context window overflows:
+  tell the user once (the fix is a `limit` on that model in their OpenCode
+  provider config, see the README), then carry on.
 
 - **It blocks until OpenCode finishes — often minutes.** Run it as a background
   command if your harness has one and tell the user the task is running;
@@ -86,11 +98,23 @@ setup error.
   the user what to install (the README lists the requirements). Don't install
   it yourself, and don't fall back to implementing — that defeats the whole
   purpose.
-- **ERROR:** read `.error` (and the `events` file) before anything else. If it
-  points at the provider or model, the user fixes that (`opencode providers
-  login`) before you retry. Retry through a follow-up turn when `.session` is
-  set; otherwise `git worktree remove --force "$wt" && git branch -D oc/task-N`
-  and dispatch fresh. Never retry without changing something.
+- **ERROR with `error_kind` `context_overflow` or `output_length`**
+  (`resumable: true`): the session ran out of room, and its commits are still
+  on the branch. Run a resume turn. Never send a follow-up into that session,
+  and never discard the worktree and start over, which throws the committed
+  work away. If the same task overflows twice, it is too big: split it.
+- **Any other ERROR:** read `.error` (and the `events` file) before anything
+  else. If it points at the provider or model, the user fixes that (`opencode
+  providers login`) before you retry. Retry through a follow-up turn when
+  `.session` is set; otherwise `git worktree remove --force "$wt" && git
+  branch -D oc/task-N` and dispatch fresh. Never retry without changing
+  something.
+- **Credentials for tests** (a test database password, a service token) go in
+  the environment of the `oc-dispatch` call itself, exported from wherever
+  the project keeps them (e.g. `set -a; . ./.env; set +a` in the same
+  command), never into a brief or a message file. Task worktrees don't have
+  the project's ignored env files, the implementer agent can't read them, and
+  it is told never to print its environment.
 - **If a dispatch is denied at the permission prompt**, do not resend the
   identical call. Say once what needs approving, then wait for the user's
   go-ahead.
@@ -99,7 +123,10 @@ setup error.
 reused for exactly two things — answering that task's NEEDS_CONTEXT questions,
 and fix rounds after its review — and is abandoned when the task is marked
 complete. The next task starts a new session with its own brief and the code
-in its worktree — never the accumulated history of prior tasks.
+in its worktree — never the accumulated history of prior tasks. When a turn's
+`usage.peak_context` is past about three quarters of the model's context
+window, run the next fix round as a resume turn instead of a follow-up: a
+follow-up into a nearly full session is how fix rounds overflow.
 
 Every follow-up message is a briefing to a capable colleague who can't see your
 screen: specific, with file:line, why, and what good looks like. Exact values
@@ -118,9 +145,18 @@ a markdown file; each task under a `## Task N: <name>` heading containing its
 complete requirements; binding cross-task requirements (exact values, formats,
 "same layout as X" relationships) in a `## Global Constraints` section.
 Each task also states `Depends on:` (the task numbers it needs merged first,
-or `none`) and `Files:` (what it creates or changes). Cut the work so most
-tasks depend on nothing and touch different files — independent tasks run in
-parallel, and a plan that is one long chain gives that up.
+or `none`) and `Files:` (what it creates or changes), and `Shares:` when its
+tests use something other tasks' tests also use (a test database, a fixed
+port, a fixture directory), or `none`. Cut the work so most tasks depend on
+nothing and touch different files — independent tasks run in parallel, and a
+plan that is one long chain gives that up.
+
+Size each task for the implementer model, not for yourself: one module, one
+route group or one screen, which a single session can finish without filling
+its context window. A task that needs many fix rounds, or overflows twice, was
+too big; split the rest of the plan finer. Put the model's working limits in
+the plan's Global Constraints only if they differ from what the shipped
+implementer agent already says.
 
 Then **pressure-test it as the senior engineer in the room.** Read it against
 the actual codebase — open the files it proposes to touch, check that its
@@ -155,13 +191,17 @@ main/master without explicit user consent.
 ## Execution in waves
 
 Run the plan in waves of parallel tasks. A wave is every incomplete task whose
-dependencies are all merged and whose `Files:` overlap no other task in the
-wave, capped at 4 (cost and provider rate limits). Dispatch the whole wave at
+dependencies are all merged and whose `Files:` and `Shares:` overlap no other
+task in the wave, capped at 4 (cost and provider rate limits). Two tasks whose
+tests share a database or a port can each pass alone and fail together, so a
+shared resource serializes them just like a shared file. Dispatch the whole wave at
 once — one `oc-dispatch` per task, each as its own background command — and
 take each task through the loop below **as soon as its dispatch returns**:
 don't hold the fastest task's review for the slowest task. Reviewer subagents
 run in parallel too. Start the next wave when every task in this one is
-merged. A strict chain of tasks simply runs one per wave.
+merged, after `scripts/oc-cleanup` has removed the wave's merged worktrees and
+branches (it never touches unmerged ones; `-n` lists without removing). A
+strict chain of tasks simply runs one per wave.
 
 For each task:
 
@@ -192,10 +232,28 @@ For each task:
    tests the implementer already ran, and no pre-judging findings — if your
    prompt contains "do not flag" or "at most Minor", stop: let the reviewer
    raise it and adjudicate in the loop.
-4. **Act on the verdicts**:
+4. **Check what a diff review can't**, while the reviewer works:
+   - **Run it.** When the task changes something a person uses (a page, a
+     CLI command, an API response), exercise it in the running software
+     from the task's worktree: drive web UIs through your harness's browser
+     tool if it has one, run the CLI, call the endpoint. Check the console
+     or logs for errors. Layout, copy, focus and state bugs pass unit tests
+     and diff review alike, and only show up here.
+   - **Prove the guards.** The report's `guards` lists each safeguard with
+     the test that fails without it. A safeguard the diff adds but `guards`
+     omits is a finding. For the risky ones (concurrency, authorization,
+     anything that loses data), check the claim yourself in a throwaway
+     worktree at the task's head: disable the safeguard, run its test,
+     expect a failure, then remove the throwaway worktree. That is
+     inspection, not implementation: the edit is never committed. A test
+     that still passes is an Important finding.
+
+   What you find goes into the same fix round as the reviewer's findings.
+5. **Act on the verdicts**:
    - Critical/Important findings → write them to a message file as specific,
      actionable feedback (file:line, why it's a problem, what good looks
-     like) and run a follow-up turn. OpenCode fixes, re-runs the covering
+     like) and run a follow-up turn, or a resume turn when the session is
+     nearly full (see Session lifecycle). OpenCode fixes, re-runs the covering
      tests, and rewrites its report. Confirm the new report names the
      covering tests, the command run, and the output; then regenerate the
      review package for the full `base..head` range (the follow-up's result
@@ -210,7 +268,7 @@ For each task:
    - A finding labeled plan-mandated — or any finding that conflicts with the
      plan's text — is the user's decision: present the finding and the plan
      text, ask which governs.
-5. **Merge**, one task at a time even when tasks ran in parallel: from the
+6. **Merge**, one task at a time even when tasks ran in parallel: from the
    repo root on the working branch, `git merge --ff-only oc/task-N`, or
    `git merge --no-ff --no-edit oc/task-N` when a wave-mate merged first.
    Then `git worktree remove "$wt"` and `git branch -d oc/task-N`. On a
@@ -218,7 +276,7 @@ For each task:
    oc/task-N`, correct the plan's `Files:` lines, and re-dispatch the task
    fresh on top of the new HEAD. The next wave's worktrees branch from HEAD,
    so HEAD must have every merged task's commits.
-6. **Mark complete**: append to the ledger (see Durable progress) and update
+7. **Mark complete**: append to the ledger (see Durable progress) and update
    your todo list. Next task.
 
 ## Final whole-branch review
@@ -236,8 +294,9 @@ per finding: write `final-fixes.md` in the `.sdd` workspace with the plan's
 `## Global Constraints` section and a `## Task F: Final review fixes` section
 listing every finding, dispatch it as task `F`, merge it like any task, then
 re-review. When clean, finish the branch with the user: merge to the base
-branch, open a pull request, or keep the branch — then clean up the `.sdd`
-workspace and any leftover worktree (`git worktree list`).
+branch, open a pull request, or keep the branch — then run
+`scripts/oc-cleanup`, settle any unmerged task branch it lists with the user,
+and clean up the `.sdd` workspace.
 
 ## Durable progress
 
@@ -253,6 +312,8 @@ Track progress in a ledger file, not only in todos.
   complete.
 - When a task's review comes back clean, append:
   `Task N: complete (commits <base7>..<head7>, review clean)`.
+- When a task needs a resume turn, append `Task N: resumed (<error_kind>)`,
+  so a task that keeps overflowing shows up before it costs another round.
 - After compaction, trust the ledger and `git log` over your own recollection.
 - `git clean -fdx` destroys the ledger (it's git-ignored scratch); recover
   from `git log`.
@@ -261,7 +322,9 @@ Track progress in a ledger file, not only in todos.
 
 Before telling the user it's complete, verify with evidence, not assumption:
 the implementation matches the approved plan; the full test suite passes (you
-ran it and saw it pass); no unaddressed findings remain. Then summarize:
+ran it and saw it pass); the user-facing flows work end to end in the running
+software (you exercised them, and the project's end-to-end suite passes if it
+has one); no unaddressed findings remain. Then summarize:
 
 - **What was implemented** — the change in plain terms.
 - **Tests added or updated** — what now protects this behavior.
@@ -280,8 +343,8 @@ ran it and saw it pass); no unaddressed findings remain. Then summarize:
 - Start implementation on main/master without explicit user consent
 - Skip the task review, or accept a review missing either verdict (spec
   compliance AND task quality)
-- Put tasks in the same wave that depend on each other or share files, or
-  exceed 4 concurrent dispatches
+- Put tasks in the same wave that depend on each other, share files or share
+  a test resource, or exceed 4 concurrent dispatches
 - Carry one OpenCode session across tasks, or paste prior-task history into a
   dispatch
 - Paste task text or the whole plan into a follow-up message (the brief
@@ -297,6 +360,11 @@ ran it and saw it pass); no unaddressed findings remain. Then summarize:
   Critical/Important findings
 - Skip the re-review after fixes
 - Accept "the tests pass" without having seen green output yourself
+- Accept a safeguard whose test still passes with the safeguard removed
+- Call a user-facing task done without exercising it in the running software
+- Send a follow-up into a session that overflowed, or discard an overflowed
+  task's worktree — resume it
+- Write credentials into a brief or a message file
 - Re-dispatch a task the ledger already marks complete — check the ledger
   (and `git log`) after any compaction or resume
 
@@ -311,3 +379,6 @@ ran it and saw it pass); no unaddressed findings remain. Then summarize:
   verdicts apply (spec compliance AND code quality).
 - OpenCode should use TDD for each task (e.g. its `/test-driven-development`
   skill, if exposed)
+- If your harness has a browser tool, use it for the run-it check on web UIs;
+  otherwise drive the software through its CLI or API, and tell the user what
+  you couldn't exercise.

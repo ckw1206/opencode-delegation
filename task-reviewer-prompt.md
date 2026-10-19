@@ -105,6 +105,13 @@ Subagent dispatch (your harness's subagent mechanism):
     **Tests:**
     - Do the new and changed tests verify real behavior, not mocks?
     - Are the task's edge cases covered?
+    - Would each test fail if the code it covers were wrong? For every
+      safeguard the diff adds (a lock, an authorization or validation
+      check, an invariant), read the test the report's `guards` entry
+      names: does its assertion actually depend on that safeguard, or
+      would it still pass with the safeguard deleted? A test that can't
+      fail is a test that asserts nothing (Important). A safeguard with no
+      `guards` entry is a finding too.
 
     **Structure:**
     - Does each file have one clear responsibility with a well-defined interface?

@@ -18,10 +18,15 @@ the work is called done.
 - [task-reviewer-prompt.md](task-reviewer-prompt.md) — reviewer subagent template
 - `scripts/` — `task-brief`, `review-package`, `sdd-workspace` (bash)
 - `scripts/oc-dispatch` — runs one task headless via `opencode run` in its own
-  worktree and prints a JSON result
+  worktree and prints a JSON result; `--resume` continues a task in a fresh
+  session after a context overflow
+- `scripts/oc-cleanup` — removes merged task worktrees and branches, lists the
+  unmerged ones
 - `.opencode/agents/implementer.md` — the restricted OpenCode agent
-  `oc-dispatch` uses (no push, no cluster/SSH access, no `.env` reads)
-- `tests/oc-dispatch.sh` — self-check for `oc-dispatch` against a stub `opencode`
+  `oc-dispatch` uses (no push, no cluster/SSH or container-runtime access, no
+  `.env` reads, no printing its environment)
+- `tests/oc-dispatch.sh`, `tests/oc-cleanup.sh` — self-checks (`oc-dispatch`
+  runs against a stub `opencode`)
 
 ## Installation
 
@@ -48,5 +53,26 @@ Requirements:
   provider (`opencode providers login`). The skill checks for `opencode` and
   `jq` on its first dispatch and stops to tell you if either is missing; it
   won't install them for you.
+- If the implementer's model is one you defined yourself under `provider` in
+  your OpenCode config (a self-hosted or OpenAI-compatible endpoint), declare
+  its limits there. Without them OpenCode can't compact a session before the
+  context window fills, and long tasks end in `ContextOverflowError`:
+
+  ```json
+  "provider": {
+    "my-provider": {
+      "models": {
+        "my-model": { "limit": { "context": 262144, "output": 32768 } }
+      }
+    }
+  }
+  ```
+
+  Use your model's real numbers. `oc-dispatch` warns when they're missing.
+  Models from OpenCode's built-in providers already carry their limits.
+- The implementer agent denies container runtimes (`docker`, `podman`),
+  because a container can mount the host filesystem around every other rule.
+  If your tests need one, start it yourself before dispatching, or adjust
+  `.opencode/agents/implementer.md` knowingly.
 - Keep the directory intact: `SKILL.md` runs the helpers in `scripts/`, and
   `oc-dispatch` loads the implementer agent from `.opencode/`
