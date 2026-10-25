@@ -7,10 +7,21 @@ OpenCode sessions (independent tasks in parallel), file handoffs (task brief →
 package), a per-task review gate run by a reviewer subagent (spec compliance +
 code quality), a durable progress ledger, and a final whole-branch review.
 
-The dispatch process follows the subagent-driven-development pattern: one
-fresh implementer session per task, a review gate after every task, durable
-progress that survives session compaction, and a whole-branch review before
-the work is called done.
+The dispatch pattern: one fresh implementer session per task, a review gate
+after every task, durable progress that survives session compaction, and a
+whole-branch review before the work is called done. Planning is not part of
+this skill — the router that dispatches writes the plan and gets the user's
+approval; this skill executes it.
+
+## What the router must deliver
+
+This skill's input is a plan file the router writes and the user approves
+before the skill loads. `oc-dispatch` parses its headings, so the shape is
+binding: each task under a `## Task N: <name>` heading carrying its complete
+requirements, binding cross-task requirements in a `## Global Constraints`
+section, and per task `Depends on:` (task numbers, or `none`), `Files:` (what
+it creates or changes), `test_first:` (`yes` / `no` — recommend `yes` for defect
+fixes; omitted means `no`) and `Shares:` (shared test resources, or `none`).
 
 ## Layout
 

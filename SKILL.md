@@ -79,11 +79,18 @@ re-reads the brief, picks up from the task's commits, and gets MSG_FILE for
 whatever is still outstanding, with the instruction to take it one item at a
 time.
 
+Whether a task is test-first is a planning decision, so it comes from the plan
+rather than from this skill: when the task's section or the Global Constraints
+call for it, the implementer writes the failing test before the fix and reports
+both runs — the red and the green — in its report's `test_first` field (null
+when the task doesn't require it). The review gate checks that evidence, not
+just the claim.
+
 Each call prints one JSON line: the implementer's report (`status`, `summary`,
-`files_changed`, `tests`, `guards`, `concerns`, `questions`) plus `session`,
-`base`, `head`, `commits`, `worktree`, `brief`, `report`, `events` (this
-turn's OpenCode event log; every turn keeps its own, numbered, and
-`.sdd/task-N-events.jsonl` links to the latest), `usage` (`steps`,
+`files_changed`, `tests`, `test_first`, `guards`, `concerns`, `questions`) plus
+`session`, `branch`, `base`, `head`, `commits`, `dirty`, `worktree`, `brief`,
+`report`, `events` (this turn's OpenCode event log; every turn keeps its own,
+numbered, and `.sdd/task-N-events.jsonl` links to the latest), `usage` (`steps`,
 `input_tokens`, `output_tokens`, `peak_context`, `duration_s` for this turn)
 and `warnings`. Exit 0 = a real status; exit 1 = `status: ERROR`
 with the cause in `.error` and its class in `.error_kind`; exit 2 = usage or
@@ -105,7 +112,9 @@ setup error.
   (`resumable: true`): the session ran out of room, and its commits are still
   on the branch. Run a resume turn. Never send a follow-up into that session,
   and never discard the worktree and start over, which throws the committed
-  work away. If the same task overflows twice, it is too big: split it.
+  work away. If the same task overflows twice, it is too big: re-cut it in the
+  plan into smaller tasks (see Execution in waves), rather than pushing the
+  session harder.
   `output_length` means one response hit the model's output limit, including
   a run that simply stopped there without writing a report. The cause is
   almost always long thinking, where the model plans every item before its
@@ -142,46 +151,39 @@ Every follow-up message is a briefing to a capable colleague who can't see your
 screen: specific, with file:line, why, and what good looks like. Exact values
 live in the brief file, not the message.
 
-## Phase 0 — Get a sound plan
+## Phase 0 — Take delivery of the router's plan
 
-If a written implementation plan already exists for this work, skip to
-Pre-flight. Otherwise write one yourself — with your agent's planning skill if
-it has one — covering problem analysis, requirements, approach, risks and
-assumptions, test strategy, and step-by-step tasks. A plan is not
-implementation code; writing it is the controller's job.
+**This skill does not write the plan.** Planning belongs to the router — the
+dispatcher that decided this work goes to OpenCode. Before this skill loads,
+the router analyzes the problem, pressure-tests the approach against the real
+codebase, sizes each task for the implementer model, and gets the user's
+go-ahead. What arrives here is a finished plan file.
+
+Phase 0 is therefore a check, not a writing task — before Task 1:
+
+- the format contract below holds (`oc-dispatch` parses it);
+- the pre-flight scan below is clean;
+- the user has approved the plan.
+
+If any of those fail, send the plan back to the router rather than fixing it
+here.
 
 **Format requirements** (the execution machinery depends on them): the plan is
 a markdown file; each task under a `## Task N: <name>` heading containing its
 complete requirements; binding cross-task requirements (exact values, formats,
 "same layout as X" relationships) in a `## Global Constraints` section.
 Each task also states `Depends on:` (the task numbers it needs merged first,
-or `none`) and `Files:` (what it creates or changes), and `Shares:` when its
-tests use something other tasks' tests also use (a test database, a fixed
-port, a fixture directory), or `none`. Cut the work so most tasks depend on
-nothing and touch different files — independent tasks run in parallel, and a
-plan that is one long chain gives that up.
+or `none`), `Files:` (what it creates or changes), `test_first:` (`yes` or
+`no` — whether the implementer writes the failing test before the fix), and
+`Shares:` when its tests use something other tasks' tests also use (a test
+database, a fixed port, a fixture directory), or `none`. Cut the work so most
+tasks depend on nothing and touch different files — independent tasks run in
+parallel, and a plan that is one long chain gives that up.
 
-Size each task for the implementer model, not for yourself: one module, one
-route group or one screen, which a single session can finish without filling
-its context window. A task that needs many fix rounds, or overflows twice, was
-too big; split the rest of the plan finer. Put the model's working limits in
-the plan's Global Constraints only if they differ from what the shipped
-implementer agent already says.
-
-Then **pressure-test it as the senior engineer in the room.** Read it against
-the actual codebase — open the files it proposes to touch, check that its
-assumptions about existing structure hold. Hunt for:
-
-- Weak or unstated assumptions ("assumes the API returns sorted results" — does it?)
-- Missing edge cases and failure modes
-- Requirements the user implied but the plan dropped
-- Architectural choices that will age badly or fight existing patterns
-- A test strategy that wouldn't actually catch the bugs that matter here
-
-Revise until the plan is genuinely sound — a few rounds here is cheaper than
-discovering a design hole after the code is written. Then show the user the
-plan and get their go-ahead before Task 1: a plan you wrote yourself needs a
-second pair of eyes.
+A defect fix should be `test_first: yes`; for anything else it is the router's
+call. Omitting the field means `no`. The implementer reports the answer back in
+its own `test_first` field — `null` when the task did not ask for it — and the
+review gate verifies it.
 
 ## Pre-flight plan review
 
@@ -229,8 +231,9 @@ For each task:
    - **NEEDS_CONTEXT** → write answers to its `questions` into a message file
      (e.g. `.sdd/task-N-msg.md`) and run a follow-up turn; it continues.
    - **BLOCKED** → if it's a context problem, provide more context in a
-     follow-up turn. If the task is too large, split it into smaller pieces
-     and dispatch each. If the plan itself is wrong, escalate to the user.
+     follow-up turn. If the task is too large, re-cut it in the plan into
+     smaller tasks and dispatch each (see Execution in waves), telling the
+     user what you re-cut. If the plan itself is wrong, escalate to the user.
      Never ignore an escalation or push the implementer to retry without
      changing something.
    - **ERROR** → see the ERROR rule above.
@@ -384,13 +387,17 @@ has one); no unaddressed findings remain. Then summarize:
 
 - Run the execution on a working branch, never main/master; `oc-dispatch`
   gives each task its own worktree off it.
-- If your agent has a planning skill, have it structure the plan Phase 0
-  produces; the format requirements above are what the machinery needs.
-- If your agent has its own code-review skill, its reviewer template can stand
-  in for [task-reviewer-prompt.md](task-reviewer-prompt.md) — the same two
-  verdicts apply (spec compliance AND code quality).
-- OpenCode should use TDD for each task (e.g. its `/test-driven-development`
-  skill, if exposed)
+- The plan comes from the router (see Phase 0); this skill is the execution
+  half and does not author the execution plan. Three documented exceptions,
+  each one recorded in the plan file: it corrects a plan's `Files:`/`Depends
+  on:` lines in flight when reality disagrees, it re-cuts a task that proves
+  too big — or overflows twice — into smaller tasks, and it authors the
+  final-review fix file, `final-fixes.md`, which is in plan format. The first
+  two re-slice work that was already approved; anything that changes what the
+  work is goes back to the user first.
+- [task-reviewer-prompt.md](task-reviewer-prompt.md) is the review gate's
+  template; its two verdicts — spec compliance AND code quality — are the bar
+  for every task review.
 - If your harness has a browser tool, use it for the run-it check on web UIs;
   otherwise drive the software through its CLI or API, and tell the user what
   you couldn't exercise.

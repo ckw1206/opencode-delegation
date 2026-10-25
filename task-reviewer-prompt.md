@@ -67,17 +67,23 @@ Subagent dispatch (your harness's subagent mechanism):
 
     ## Tests
 
-    The implementer already ran the tests and reported results with TDD
-    evidence for exactly this code. Do not re-run the suite to confirm their
-    report. Run a test only when reading the code raises a specific doubt
-    that no existing run answers — and then a focused test, never a
-    package-wide suite, race detector run, or repeated/high-count loop. If
-    heavy validation seems warranted, recommend it in your report instead of
-    running it. If you cannot run commands in this environment, name the
-    test you would run.
+    The implementer already ran the tests and reported results — with
+    red/green evidence — for exactly this code. Do not re-run the suite to
+    confirm their report. Run a test only when reading the code raises a
+    specific doubt that no existing run answers — and then a focused test,
+    never a package-wide suite, race detector run, or repeated/high-count
+    loop. If heavy validation seems warranted, recommend it in your report
+    instead of running it. If you cannot run commands in this environment,
+    name the test you would run.
 
     Warnings or other noise in the implementer's reported test output are
     findings — test output should be pristine.
+
+    When the report's `test_first` is not null, verify it instead of accepting
+    it: the red run must have failed for the stated reason — a real assertion,
+    not a missing file, import error, or syntax error — and the change between
+    the two runs must be what turned it green. A `test_first` that is null when
+    the task's brief required it is a spec finding.
 
     ## Part 1: Spec Compliance
 

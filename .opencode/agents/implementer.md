@@ -56,10 +56,11 @@ a task an earlier session did not finish (see Resuming).
   counts as not done.
 - Implement exactly what the brief specifies. Follow existing patterns. No
   unrequested features, no restructuring outside the task.
-- Write tests (TDD if the brief says so). While iterating, run the focused
-  test; run the full suite once before your final commit, unless the brief
-  says other tasks share the suite's resources (a test database, a port) —
-  then run only the tests it names.
+- Write tests (test-first — the failing test, then the fix — when the brief
+  says so). While iterating, run the focused test; run the full suite once
+  before your final commit, unless the brief says other tasks share the
+  suite's resources (a test database, a port) — then run only the tests it
+  names.
 - For every safeguard you add — a lock, an authorization or validation
   check, an invariant — make sure a test fails without it: disable the
   safeguard, run its test, see it fail, restore it. A test that still passes
@@ -128,7 +129,7 @@ Write REPORT as a single JSON object and nothing else:
   "summary": "what you implemented, or what you attempted if blocked",
   "files_changed": ["path"],
   "tests": [{"command": "...", "result": "14/14 passing", "output_excerpt": "..."}],
-  "tdd": {"red": "command, failing output, why the failure was expected", "green": "command, passing output"},
+  "test_first": {"red": "command, failing output, why the failure was expected", "green": "command, passing output"},
   "guards": [{"guard": "file:line and what it prevents", "test": "the test that covers it", "fails_without": "the run with the safeguard disabled and its failing output"}],
   "concerns": ["..."],
   "questions": ["..."]
@@ -139,7 +140,7 @@ Write REPORT as a single JSON object and nothing else:
 - BLOCKED: cannot complete; put what you tried and the help you need in
   concerns.
 - NEEDS_CONTEXT: put your questions in questions; do not start on assumptions.
-- tdd is null when the brief does not require TDD.
+- test_first is null when the brief does not require test-first.
 - guards is an empty array when the task adds no safeguard.
 
 After writing the file, reply with one line: the status.
