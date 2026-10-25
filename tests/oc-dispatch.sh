@@ -12,12 +12,24 @@ cat > "$tmp/bin/opencode" <<'EOF'
 #!/usr/bin/env bash
 # Stub: behaves per $STUB_MODE; logs its args and config dir to $STUB_LOG.
 if [ "$1" = agent ]; then
-  [ -n "${STUB_NO_AGENT:-}" ] || [ ! -f "$OPENCODE_CONFIG_DIR/agents/implementer.md" ] || echo "implementer (primary)"
+  # STUB_NO_AGENTLIST models the real flake: the config-dir agent is appended
+  # last and an async config load can print the listing without it.
+  [ -n "${STUB_NO_AGENT:-}${STUB_NO_AGENTLIST:-}" ] || [ ! -f "$OPENCODE_CONFIG_DIR/agents/implementer.md" ] || echo "implementer (primary)"
   echo "build (primary)"
   exit 0
 fi
 if [ "$1" = debug ]; then # `debug config`: the resolved config, per $STUB_CONFIG
   cfg=${STUB_CONFIG:-'{}'}
+  # opencode resolves the config dir's agents into the merged config it prints;
+  # a config dir whose implementer does not resolve is what STUB_NO_AGENT and
+  # STUB_NO_RESOLVE model.
+  if [ -z "${STUB_NO_AGENT:-}${STUB_NO_RESOLVE:-}" ] && [ -f "$OPENCODE_CONFIG_DIR/agents/implementer.md" ] &&
+    [ -z "$(jq -r '.agent.implementer // empty' <<< "$cfg")" ]; then
+    cfg=$(jq -c '. + {agent:{implementer:{model:(.model // "custom/stub-model")}}}' <<< "$cfg")
+  fi
+  # A notice on stderr must not be mistaken for part of the config: the gate
+  # parses stdout only, so stderr noise cannot turn a loadable agent into a refusal.
+  [ -z "${STUB_STDERR:-}" ] || printf 'WARN  opencode: some notice\n' >&2
   echo "$cfg"
   exit 0
 fi
@@ -61,7 +73,7 @@ git init -q -b main
 git config user.email t@t && git config user.name t
 git commit -q --allow-empty -m init
 printf '## Global Constraints\nPORT=8080\n' > plan.md
-for i in 1 2 3 4 5 6 7 8 9 10 11; do printf '## Task %s: t%s\ndo %s\n' "$i" "$i" "$i" >> plan.md; done
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do printf '## Task %s: t%s\ndo %s\n' "$i" "$i" "$i" >> plan.md; done
 
 pass() { echo "ok - $1"; }
 die() { echo "FAIL - $1" >&2; exit 1; }
@@ -168,3 +180,28 @@ rc=0; STUB_NO_AGENT=1 STUB_MODE=done "$dispatch" plan.md 7 wt7 >/dev/null 2>&1 |
 run done plan.md 99 wt99 2>/dev/null
 [ "$rc" -ne 0 ] && [ ! -e wt99 ] && ! git show-ref --verify --quiet refs/heads/oc/task-99 &&
   pass "unknown task fails without leaving a worktree or branch" || die "task 99: rc=$rc"
+
+# The listing flake: `opencode agent list` can print without the config-dir
+# agent (it is appended last, after an async config load) even with a single
+# process running. That is a false negative, not a missing agent, so dispatch
+# must not refuse on it -- and it must still refuse when the agent genuinely
+# does not resolve into the config opencode will run with.
+rm -f "$STUB_LOG"
+rc=0; STUB_NO_AGENTLIST=1 STUB_MODE=done "$dispatch" plan.md 11 wt-flaky >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 0 ] && [ -d wt-flaky ] && grep -q -- '--agent implementer' "$STUB_LOG" &&
+  pass "agent list missing the config-dir agent does not block dispatch" ||
+  die "flaky agent list: rc=$rc"
+
+# Fresh task number: 11 is already built by the test above, and reusing it would
+# let the branch-exists check satisfy this assertion instead of the agent gate.
+rc=0; STUB_NO_RESOLVE=1 STUB_MODE=done "$dispatch" plan.md 12 wt-noresolve >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 2 ] && [ ! -e wt-noresolve ] &&
+  pass "agent absent from the resolved config -> refuse before opencode run" ||
+  die "no-resolve: rc=$rc"
+
+# The gate must not refuse a legitimately configured user because opencode wrote a
+# notice to stderr: `debug config` stdout is the config, stderr is not.
+rc=0; STUB_STDERR=1 STUB_MODE=done "$dispatch" plan.md 13 wt-stderr >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 0 ] && [ -d wt-stderr ] && grep -q -- '--agent implementer' "$STUB_LOG" &&
+  pass "stderr noise does not corrupt the config probe" ||
+  die "stderr banner: rc=$rc"
