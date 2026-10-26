@@ -19,6 +19,12 @@ if [ "$1" = agent ]; then
   exit 0
 fi
 if [ "$1" = debug ]; then # `debug config`: the resolved config, per $STUB_CONFIG
+  # STUB_FLAKY_CONFIG=N: the first N calls fail, as concurrent starts do.
+  if [ -n "${STUB_FLAKY_CONFIG:-}" ]; then
+    calls=$(( $(cat "$STUB_LOG.cfgcalls" 2>/dev/null || echo 0) + 1 ))
+    echo "$calls" > "$STUB_LOG.cfgcalls"
+    [ "$calls" -gt "$STUB_FLAKY_CONFIG" ] || { echo "Error: busy" >&2; exit 1; }
+  fi
   cfg=${STUB_CONFIG:-'{}'}
   # opencode resolves the config dir's agents into the merged config it prints;
   # a config dir whose implementer does not resolve is what STUB_NO_AGENT and
@@ -73,7 +79,7 @@ git init -q -b main
 git config user.email t@t && git config user.name t
 git commit -q --allow-empty -m init
 printf '## Global Constraints\nPORT=8080\n' > plan.md
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do printf '## Task %s: t%s\ndo %s\n' "$i" "$i" "$i" >> plan.md; done
+for i in $(seq 1 15); do printf '## Task %s: t%s\ndo %s\n' "$i" "$i" "$i" >> plan.md; done
 
 pass() { echo "ok - $1"; }
 die() { echo "FAIL - $1" >&2; exit 1; }
@@ -205,3 +211,15 @@ rc=0; STUB_STDERR=1 STUB_MODE=done "$dispatch" plan.md 13 wt-stderr >/dev/null 2
 [ "$rc" -eq 0 ] && [ -d wt-stderr ] && grep -q -- '--agent implementer' "$STUB_LOG" &&
   pass "stderr noise does not corrupt the config probe" ||
   die "stderr banner: rc=$rc"
+
+# Concurrent starts: `debug config` can fail transiently; dispatch retries it,
+# and still refuses (exit 2, nothing created) when it never succeeds.
+export OC_DISPATCH_RETRY_DELAY=0
+rm -f "$STUB_LOG" "$STUB_LOG.cfgcalls"
+rc=0; STUB_FLAKY_CONFIG=2 STUB_MODE=done "$dispatch" plan.md 14 wt-flakycfg >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 0 ] && [ -d wt-flakycfg ] && pass "transient debug config failure is retried" ||
+  die "flaky config: rc=$rc"
+rm -f "$STUB_LOG.cfgcalls"
+rc=0; STUB_FLAKY_CONFIG=99 STUB_MODE=done "$dispatch" plan.md 15 wt-deadcfg >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 2 ] && [ ! -e wt-deadcfg ] && pass "persistent debug config failure -> exit 2" ||
+  die "dead config: rc=$rc"

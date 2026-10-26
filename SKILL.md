@@ -205,7 +205,9 @@ dependencies are all merged and whose `Files:` and `Shares:` overlap no other
 task in the wave, capped at 4 (cost and provider rate limits). Two tasks whose
 tests share a database or a port can each pass alone and fail together, so a
 shared resource serializes them just like a shared file. Dispatch the whole wave at
-once — one `oc-dispatch` per task, each as its own background command — and
+once — one `oc-dispatch` per task, each as its own background command, started
+a few seconds apart (simultaneous starts can briefly fail OpenCode's config
+load; `oc-dispatch` retries that, and staggering keeps it rare) — and
 take each task through the loop below **as soon as its dispatch returns**:
 don't hold the fastest task's review for the slowest task. Reviewer subagents
 run in parallel too. Start the next wave when every task in this one is
