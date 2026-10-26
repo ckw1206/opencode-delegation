@@ -123,6 +123,8 @@ run done plan.md 2 wt2 ses_stub "$tmp/fix.md"
 [ "$rc" -eq 0 ] && [ "$(field commits)" = 2 ] && [ "$(field base)" = "$base2" ] &&
   grep -q -- '--session ses_stub' "$STUB_LOG" && grep -q 'off-by-one' "$STUB_LOG" &&
   pass "follow-up turn reuses session, worktree and base" || die "follow-up: $out"
+grep -q 'without stopping to ask for approval' "$STUB_LOG" && pass "follow-up asks for every item in one turn" ||
+  die "follow-up footer"
 [ "$(field events)" != "$ev2" ] && cmp -s "$ev2" "$tmp/ev2" && [ wt2/.sdd/task-2-events.jsonl -ef "$(field events)" ] &&
   [ -e wt2/.sdd/task-2-stderr.1.log ] && [ -e wt2/.sdd/task-2-stderr.2.log ] &&
   pass "follow-up turn logs to its own files; earlier turn's events kept" || die "follow-up events: $out"
@@ -141,7 +143,12 @@ STUB_CONFIG='{"model":"custom/m","provider":{"custom":{"models":{"m":{}}}}}' run
   pass "custom model without a limit -> warning" || die "limit warning: $out"
 STUB_CONFIG='{"model":"custom/m","provider":{"custom":{"models":{"m":{"limit":{"context":1000,"output":100}}}}}}' \
   run done plan.md 9 wt9
-[ "$rc" -eq 0 ] && [ "$(field 'warnings | length')" = 0 ] && pass "declared limit -> no warning" || die "limit ok: $out"
+[ "$rc" -eq 0 ] && [ "$(field 'warnings | length')" = 0 ] && [ "$(field usage.context_limit)" = 1000 ] &&
+  [ "$(field usage.peak_ratio)" = 0.15 ] && pass "declared limit -> no warning, peak_ratio reported" || die "limit ok: $out"
+STUB_CONFIG='{"model":"custom/m","provider":{"custom":{"models":{"m":{"limit":{"context":200,"output":100}}}}}}' \
+  run done plan.md 9 wt9 ses_stub "$tmp/fix.md"
+[ "$rc" -eq 0 ] && [ "$(field usage.peak_ratio)" = 0.75 ] && [[ "$(field 'warnings[0]')" == *"resume turn"* ]] &&
+  pass "peak context past 70% of the window -> resume warning" || die "ratio warning: $out"
 
 run overflow plan.md 10 wt10
 [ "$rc" -eq 1 ] && [ "$(field status)" = ERROR ] && [ "$(field error_kind)" = context_overflow ] &&

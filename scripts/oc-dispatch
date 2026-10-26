@@ -84,6 +84,14 @@ unlimited=$(jq -r '
     else (.provider[$m[:$i]].models[$m[$i + 1:]] // null) as $def
       | if $def != null and $def.limit == null then $m else empty end
     end' <<< "$cfg_json" 2>/dev/null || true)
+# The window size, when the provider config declares it, turns usage.peak_context
+# into a ratio the controller can act on (resume instead of follow-up).
+ctx_limit=$(jq -r '
+  (.agent.implementer.model // .model // "") as $m
+  | ($m | index("/")) as $i
+  | if $i == null then empty
+    else .provider[$m[:$i]].models[$m[$i + 1:]].limit.context // empty end' <<< "$cfg_json" 2>/dev/null || true)
+[[ "$ctx_limit" =~ ^[1-9][0-9]*$ ]] || ctx_limit=null
 [ -z "$unlimited" ] ||
   warnings+="model $unlimited declares no limit (context/output) in its provider config, so OpenCode cannot compact before the context window overflows"$'\n'
 
@@ -117,8 +125,12 @@ case $mode in
     git -C "$wt" rev-parse HEAD > "$sdd/task-$n-base"
     args+=(--title "task-$n" "Task $n. BRIEF: $brief REPORT: $report") ;;
   followup)
+    # Without this, implementers stop after the first item to ask for approval
+    # or plan every item in one response and hit the output limit.
     args+=(--session "$sid" "$(cat "$msgfile")
 
+Do every item above in this turn without stopping to ask for approval: one at
+a time (grep, read in ranges, edit, test, commit), keeping each response short.
 When done, rewrite REPORT: $report") ;;
   resume)
     # The plan may have been corrected since the first turn; the new session
@@ -144,13 +156,17 @@ sid=$(jq -rn '[inputs | .sessionID // empty][0] // empty' "$events" 2>/dev/null 
 err=$(jq -rn '[inputs | select(.type == "error") | .error.data.message // .error.name // "error event"][0] // empty' "$events" 2>/dev/null || true)
 err_name=$(jq -rn '[inputs | select(.type == "error") | .error.name // empty][0] // empty' "$events" 2>/dev/null || true)
 last_finish=$(jq -rn '[inputs | select(.type == "step_finish") | .part.reason // empty] | last // empty' "$events" 2>/dev/null || true)
-usage=$(jq -cn --argjson secs "$SECONDS" '
+usage=$(jq -cn --argjson secs "$SECONDS" --argjson limit "$ctx_limit" '
   [inputs | select(.type == "step_finish") | .part.tokens // {}]
   | {steps: length,
      input_tokens: (map(.input // 0) | add // 0),
      output_tokens: (map(.output // 0) | add // 0),
      peak_context: (map((.input // 0) + (.cache.read // 0)) | max // 0),
-     duration_s: $secs}' "$events" 2>/dev/null || echo null)
+     duration_s: $secs}
+  | if $limit then . + {context_limit: $limit, peak_ratio: ((.peak_context / $limit * 100 | floor) / 100)} else . end' "$events" 2>/dev/null || echo null)
+ratio=$(jq -r '.peak_ratio // 0' <<< "$usage" 2>/dev/null || echo 0)
+! awk -v r="$ratio" 'BEGIN { exit !(r >= 0.7) }' ||
+  warnings+="peak context reached $ratio of the window: run the next turn on this task as a resume turn, not a follow-up"$'\n'
 base=$(cat "$sdd/task-$n-base")
 head=$(git -C "$wt" rev-parse HEAD)
 on=$(git -C "$wt" symbolic-ref --short -q HEAD || echo detached)

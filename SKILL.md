@@ -84,7 +84,9 @@ Each call prints one JSON line: the implementer's report (`status`, `summary`,
 `base`, `head`, `commits`, `worktree`, `brief`, `report`, `events` (this
 turn's OpenCode event log; every turn keeps its own, numbered, and
 `.sdd/task-N-events.jsonl` links to the latest), `usage` (`steps`,
-`input_tokens`, `output_tokens`, `peak_context`, `duration_s` for this turn)
+`input_tokens`, `output_tokens`, `peak_context`, `duration_s` for this turn,
+plus `context_limit` and `peak_ratio` when the model's provider config
+declares `limit.context`)
 and `warnings`. Exit 0 = a real status; exit 1 = `status: ERROR`
 with the cause in `.error` and its class in `.error_kind`; exit 2 = usage or
 setup error.
@@ -113,6 +115,11 @@ setup error.
   OpenCode's JSON stream leaves out reasoning. So in the resume MSG_FILE,
   name the one item to start with and tell it to grep and read in ranges,
   instead of asking for smaller writes.
+- **ERROR "no report written" or "report is not a JSON object…" with
+  commits on the branch and `.session` set:** the work is probably done and
+  only the report is missing or malformed. Send a follow-up asking it to
+  write REPORT as one valid JSON object for the commits already made; don't
+  redo the work.
 - **Any other ERROR:** read `.error` (and the `events` file) before anything
   else. If it points at the provider or model, the user fixes that (`opencode
   providers login`) before you retry. Retry through a follow-up turn when
@@ -136,7 +143,8 @@ complete. The next task starts a new session with its own brief and the code
 in its worktree — never the accumulated history of prior tasks. When a turn's
 `usage.peak_context` is past about three quarters of the model's context
 window, run the next fix round as a resume turn instead of a follow-up: a
-follow-up into a nearly full session is how fix rounds overflow.
+follow-up into a nearly full session is how fix rounds overflow. When the
+window is known, `oc-dispatch` adds a `warnings` entry for this at 70%.
 
 Every follow-up message is a briefing to a capable colleague who can't see your
 screen: specific, with file:line, why, and what good looks like. Exact values
