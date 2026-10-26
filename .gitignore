@@ -2,3 +2,7 @@
 /node_modules/
 /package.json
 /package-lock.json
+# OpenCode installs the config dir's plugin dependencies here at startup
+.opencode/node_modules/
+.opencode/package.json
+.opencode/package-lock.json

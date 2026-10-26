@@ -65,11 +65,20 @@ export OPENCODE_CONFIG_DIR="$here/../.opencode"
 # as part of the document and jq would reject a perfectly loadable agent (jq parses
 # a stream, so one leading banner line is a parse error). Capture stderr only to
 # explain a genuine failure, and only after it happens.
-cfg_json=$(opencode debug config 2>/dev/null) || {
-  diag=$(opencode debug config 2>&1 | tr '\n' ' ' | cut -c1-200) || true
-  echo "opencode debug config failed: ${diag:-no diagnostic output}" >&2
-  exit 2
-}
+# Several dispatches starting at once (a wave) can make `debug config` exit
+# non-zero while the same call a moment later prints a valid config: observed on
+# 3 simultaneous starts, where the failure's own diagnostic rerun was a clean
+# config. Retry a transient failure with jittered backoff before refusing.
+cfg_json="" attempt=1
+until cfg_json=$(opencode debug config 2>/dev/null); do
+  if [ "$attempt" -ge 4 ]; then
+    diag=$(opencode debug config 2>&1 | tr '\n' ' ' | cut -c1-200) || true
+    echo "opencode debug config failed $attempt times: ${diag:-no diagnostic output}" >&2
+    exit 2
+  fi
+  sleep $((attempt * ${OC_DISPATCH_RETRY_DELAY:-3} + RANDOM % 3))
+  attempt=$((attempt + 1))
+done
 jq -e '.agent.implementer' >/dev/null <<< "$cfg_json" ||
   { echo "opencode cannot load the implementer agent from $OPENCODE_CONFIG_DIR" >&2; exit 2; }
 
