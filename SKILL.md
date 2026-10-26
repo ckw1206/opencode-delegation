@@ -154,6 +154,9 @@ implementation code; writing it is the controller's job.
 a markdown file; each task under a `## Task N: <name>` heading containing its
 complete requirements; binding cross-task requirements (exact values, formats,
 "same layout as X" relationships) in a `## Global Constraints` section.
+Put the project's lint, format and type-check commands in Global Constraints
+too, so every task runs them before reporting; otherwise each task passes its
+own tests and the linter first runs at final acceptance, on everyone's code.
 Each task also states `Depends on:` (the task numbers it needs merged first,
 or `none`) and `Files:` (what it creates or changes), and `Shares:` when its
 tests use something other tasks' tests also use (a test database, a fixed
@@ -253,6 +256,10 @@ For each task:
      tool if it has one, run the CLI, call the endpoint. Check the console
      or logs for errors. Layout, copy, focus and state bugs pass unit tests
      and diff review alike, and only show up here.
+   - **Measure what it can slow down.** When the task adds work to a hot
+     path (under a lock, in a polling or retry loop, per request), time it
+     before and after with the worst input the plan allows. A retry inside a
+     lock reads as correct in the diff and holds the lock for seconds.
    - **Prove the guards.** The report's `guards` lists each safeguard with
      the test that fails without it. A safeguard the diff adds but `guards`
      omits is a finding. For the risky ones (concurrency, authorization,
@@ -285,7 +292,10 @@ For each task:
 6. **Merge**, one task at a time even when tasks ran in parallel: from the
    repo root on the working branch, `git merge --ff-only oc/task-N`, or
    `git merge --no-ff --no-edit oc/task-N` when a wave-mate merged first.
-   Then `git worktree remove "$wt"` and `git branch -d oc/task-N`. On a
+   Then `git worktree remove "$wt"` and `git branch -d oc/task-N`. After
+   the last merge of a wave, run the full test suite and the Global
+   Constraints checks on the working branch: tasks that each passed alone can
+   fail together. On a
    conflict, `git merge --abort`, remove the worktree, `git branch -D
    oc/task-N`, correct the plan's `Files:` lines, and re-dispatch the task
    fresh on top of the new HEAD. The next wave's worktrees branch from HEAD,
@@ -329,6 +339,16 @@ Track progress in a ledger file, not only in todos.
 - When a task needs a resume turn, append `Task N: resumed (<error_kind>)`,
   so a task that keeps overflowing shows up before it costs another round.
 - After compaction, trust the ledger and `git log` over your own recollection.
+- **Pausing** (the user asks to stop, or to switch the implementer's model):
+  stop each in-flight dispatch by killing its OpenCode process
+  (`pkill -f -- "--dir $wt "` with the result's `worktree` path; the trailing
+  space keeps `task-1` from matching `task-10`), and any test server it left
+  running from that worktree. Then append to the ledger, per task: commits
+  so far, uncommitted files, items left.
+  A stopped turn reports ERROR (exit 143); don't discard its worktree.
+  Continue each task with a resume turn whose MSG_FILE names the items left.
+  A model switch takes effect on the next turn, so resume rather than
+  follow up into a session that ran on the old model.
 - `git clean -fdx` destroys the ledger (it's git-ignored scratch); recover
   from `git log`.
 
