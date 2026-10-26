@@ -84,9 +84,10 @@ Each call prints one JSON line: the implementer's report (`status`, `summary`,
 `base`, `head`, `commits`, `worktree`, `brief`, `report`, `events` (this
 turn's OpenCode event log; every turn keeps its own, numbered, and
 `.sdd/task-N-events.jsonl` links to the latest), `usage` (`steps`,
-`input_tokens`, `output_tokens`, `peak_context`, `duration_s` for this turn,
-plus `context_limit` and `peak_ratio` when the model's provider config
-declares `limit.context`)
+`input_tokens`, `output_tokens`, `reasoning_tokens`, `peak_output` (the
+largest single response, reasoning included), `peak_context`, `duration_s`
+for this turn, plus `context_limit` and `peak_ratio` when the model's
+provider config declares `limit.context`)
 and `warnings`. Exit 0 = a real status; exit 1 = `status: ERROR`
 with the cause in `.error` and its class in `.error_kind`; exit 2 = usage or
 setup error.
@@ -111,15 +112,22 @@ setup error.
   `output_length` means one response hit the model's output limit, including
   a run that simply stopped there without writing a report. The cause is
   almost always long thinking, where the model plans every item before its
-  first edit, not a large write. The `events` file can't show it, because
-  OpenCode's JSON stream leaves out reasoning. So in the resume MSG_FILE,
-  name the one item to start with and tell it to grep and read in ranges,
-  instead of asking for smaller writes.
-- **ERROR "no report written" or "report is not a JSON object…" with
-  commits on the branch and `.session` set:** the work is probably done and
-  only the report is missing or malformed. Send a follow-up asking it to
-  write REPORT as one valid JSON object for the commits already made; don't
-  redo the work.
+  first edit, not a large write: `usage.reasoning_tokens` and
+  `usage.peak_output` show it (`output_tokens` alone excludes reasoning).
+  So in the resume MSG_FILE, name the one item to start with and tell it to
+  grep and read in ranges, instead of asking for smaller writes. When
+  `.error` says the largest response reached the declared `limit.output`,
+  a resume will most likely stop the same way: tell the user the cap is too
+  small for a reasoning model (README) and resume once they raise it.
+- **ERROR with `error_kind` `no_report`**: the session ended on prose
+  instead of a report. Read `.last_text` first: it may be a question (answer
+  it), or a tool call written out as text, which a weaker model does instead
+  of calling the tool. Send a follow-up turn that answers it or says what to
+  do next, and ends by asking for the report. With commits on the branch the
+  work is probably done: ask for REPORT as one valid JSON object for the
+  commits already made, and don't have it redo the work.
+- **ERROR "report is not a JSON object…" with commits on the branch and
+  `.session` set:** same as above: a follow-up asking it to rewrite REPORT.
 - **Any other ERROR:** read `.error` (and the `events` file) before anything
   else. If it points at the provider or model, the user fixes that (`opencode
   providers login`) before you retry. Retry through a follow-up turn when

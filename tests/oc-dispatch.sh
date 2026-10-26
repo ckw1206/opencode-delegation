@@ -45,7 +45,7 @@ if [ "$STUB_MODE" = error ]; then
   exit 1
 fi
 echo "{\"type\":\"step_start\",\"sessionID\":\"${sid:-ses_stub}\"}"
-step='{"type":"step_finish","part":{"tokens":{"input":100,"output":10,"cache":{"read":50}}}}'
+step='{"type":"step_finish","part":{"tokens":{"input":100,"output":10,"reasoning":5,"cache":{"read":50}}}}'
 case $STUB_MODE in
   done)
     echo "$RANDOM" >> "$dir/work.txt"
@@ -59,10 +59,12 @@ case $STUB_MODE in
   nocommit) echo '{"status":"DONE"}' > "$report" ;;
   blocked) echo '{"status":"BLOCKED","concerns":["stuck"]}' > "$report" ;;
   badjson) echo 'not json' > "$report" ;;
-  noreport) ;;
+  noreport) # ends on prose, e.g. a tool call written out as text
+    echo '{"type":"text","part":{"type":"text","text":"Planning."}}'
+    echo '{"type":"text","part":{"type":"text","text":"Now I will call edit with {\"path\": \"a.py\"}"}}' ;;
   length) # cut off at the output limit: opencode exits 0 without an error event
     echo '{"type":"step_finish","part":{"reason":"tool-calls","tokens":{"input":100,"output":10}}}'
-    echo '{"type":"step_finish","part":{"reason":"length","tokens":{"input":100,"output":32000}}}' ;;
+    echo '{"type":"step_finish","part":{"reason":"length","tokens":{"input":100,"output":120,"reasoning":8000}}}' ;;
 esac
 EOF
 chmod +x "$tmp/bin/opencode"
@@ -73,7 +75,7 @@ git init -q -b main
 git config user.email t@t && git config user.name t
 git commit -q --allow-empty -m init
 printf '## Global Constraints\nPORT=8080\n' > plan.md
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do printf '## Task %s: t%s\ndo %s\n' "$i" "$i" "$i" >> plan.md; done
+for i in $(seq 1 14); do printf '## Task %s: t%s\ndo %s\n' "$i" "$i" "$i" >> plan.md; done
 
 pass() { echo "ok - $1"; }
 die() { echo "FAIL - $1" >&2; exit 1; }
@@ -99,6 +101,7 @@ grep -q 'PORT=8080' "$(field brief)" && grep -q '^## Task 2' "$(field brief)" &&
   pass "brief has task + Global Constraints" || die "brief content"
 [ "$(field usage.steps)" = 2 ] && [ "$(field usage.input_tokens)" = 200 ] &&
   [ "$(field usage.output_tokens)" = 20 ] && [ "$(field usage.peak_context)" = 150 ] &&
+  [ "$(field usage.reasoning_tokens)" = 10 ] && [ "$(field usage.peak_output)" = 15 ] &&
   [ "$(field 'warnings | length')" = 0 ] && pass "usage totals from step_finish events" || die "usage: $out"
 cfg=$(sed -n 's/^config_dir=//p' "$STUB_LOG")
 [ -f "$cfg/agents/implementer.md" ] && grep -q -- '--agent implementer' "$STUB_LOG" &&
@@ -110,7 +113,9 @@ run nocommit plan.md 3 wt3
 [ "$rc" -eq 1 ] && [[ "$(field error)" == *"no commits"* ]] && pass "DONE without commits -> ERROR" || die "nocommit: $out"
 
 run noreport plan.md 4 wt4
-[ "$rc" -eq 1 ] && [[ "$(field error)" == *"no report"* ]] && pass "missing report -> ERROR" || die "noreport: $out"
+[ "$rc" -eq 1 ] && [[ "$(field error)" == *"no report"* ]] && [ "$(field error_kind)" = no_report ] &&
+  [[ "$(field last_text)" == *'call edit with {"path"'* ]] && [ "$(field resumable)" = null ] &&
+  pass "missing report -> ERROR no_report with the last text" || die "noreport: $out"
 
 run badjson plan.md 5 wt5
 [ "$rc" -eq 1 ] && [[ "$(field error)" == *"known status"* ]] && pass "non-JSON report -> ERROR" || die "badjson: $out"
@@ -173,6 +178,7 @@ run length plan.md 10 wt10 --resume
 [ "$rc" -eq 1 ] && [ "$(field error_kind)" = output_length ] && [ "$(field resumable)" = true ] &&
   [[ "$(field error)" == *"output limit"* ]] && pass "output-length stop without report -> output_length, resumable" ||
   die "length: $out"
+[[ "$(field error)" != *"raise limit.output"* ]] && pass "no declared output limit -> no cap hint" || die "length hint: $out"
 grep -q legacy wt10/.sdd/task-10-events.0.jsonl && [ wt10/.sdd/task-10-events.jsonl -ef "$(field events)" ] &&
   pass "un-numbered events file from before is kept" || die "legacy events: $(ls wt10/.sdd)"
 
@@ -212,3 +218,11 @@ rc=0; STUB_STDERR=1 STUB_MODE=done "$dispatch" plan.md 13 wt-stderr >/dev/null 2
 [ "$rc" -eq 0 ] && [ -d wt-stderr ] && grep -q -- '--agent implementer' "$STUB_LOG" &&
   pass "stderr noise does not corrupt the config probe" ||
   die "stderr banner: rc=$rc"
+
+# Reasoning counts toward the output cap: a response whose reasoning reached
+# the declared limit will reach it again on resume, so the error says so.
+STUB_CONFIG='{"model":"custom/m","provider":{"custom":{"models":{"m":{"limit":{"context":100000,"output":8192}}}}}}' \
+  run length plan.md 14 wt14
+[ "$rc" -eq 1 ] && [ "$(field error_kind)" = output_length ] && [ "$(field usage.peak_output)" = 8120 ] &&
+  [[ "$(field error)" == *"8120 of the model's declared limit.output 8192"* ]] &&
+  pass "output_length at the declared cap -> raise-limit hint" || die "cap hint: $out"
