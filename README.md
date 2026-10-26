@@ -71,6 +71,13 @@ Requirements:
   ```
 
   Use your model's real numbers. `oc-dispatch` warns when they're missing.
+  For a reasoning model, give `output` room for the thinking as well as the
+  answer: reasoning counts toward it, and with 8192 a model can spend the
+  whole cap thinking before its first edit, on every resume. `oc-dispatch`
+  says so when an `output_length` stop reaches the declared cap. To try a
+  different model or cap without touching your global config, point
+  `OPENCODE_CONFIG` at a file holding just the `model` and that `provider`
+  entry; `oc-dispatch` passes the environment through.
   Models from OpenCode's built-in providers already carry their limits.
 - The implementer agent denies container runtimes (`docker`, `podman`),
   because a container can mount the host filesystem around every other rule.

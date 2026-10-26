@@ -103,6 +103,14 @@ ctx_limit=$(jq -r '
 [[ "$ctx_limit" =~ ^[1-9][0-9]*$ ]] || ctx_limit=null
 [ -z "$unlimited" ] ||
   warnings+="model $unlimited declares no limit (context/output) in its provider config, so OpenCode cannot compact before the context window overflows"$'\n'
+# The declared output cap, to tell an output_length stop that will recur on
+# resume (a response's reasoning alone filled the cap) from a one-off.
+out_limit=$(jq -r '
+  (.agent.implementer.model // .model // "") as $m
+  | ($m | index("/")) as $i
+  | if $i == null then empty
+    else .provider[$m[:$i]].models[$m[$i + 1:]].limit.output // empty end' <<< "$cfg_json" 2>/dev/null || true)
+[[ "$out_limit" =~ ^[1-9][0-9]*$ ]] || out_limit=""
 
 if [ "$mode" = first ]; then
   [ ! -e "$wt" ] || { echo "worktree $wt already exists; follow-up turns need SESSION_ID MSG_FILE, resume turns --resume" >&2; exit 2; }
@@ -170,12 +178,19 @@ usage=$(jq -cn --argjson secs "$SECONDS" --argjson limit "$ctx_limit" '
   | {steps: length,
      input_tokens: (map(.input // 0) | add // 0),
      output_tokens: (map(.output // 0) | add // 0),
+     reasoning_tokens: (map(.reasoning // 0) | add // 0),
+     peak_output: (map((.output // 0) + (.reasoning // 0)) | max // 0),
      peak_context: (map((.input // 0) + (.cache.read // 0)) | max // 0),
      duration_s: $secs}
   | if $limit then . + {context_limit: $limit, peak_ratio: ((.peak_context / $limit * 100 | floor) / 100)} else . end' "$events" 2>/dev/null || echo null)
 ratio=$(jq -r '.peak_ratio // 0' <<< "$usage" 2>/dev/null || echo 0)
 ! awk -v r="$ratio" 'BEGIN { exit !(r >= 0.7) }' ||
   warnings+="peak context reached $ratio of the window: run the next turn on this task as a resume turn, not a follow-up"$'\n'
+peak_output=$(jq -r '.peak_output // 0' <<< "$usage" 2>/dev/null || echo 0)
+# What the model said last, for a run that ends without a report: it may have
+# asked a question in prose, or written its tool call as text.
+last_text=$(jq -rn '[inputs | select(.type == "text") | .part.text // empty] | last // empty' "$events" 2>/dev/null |
+  tail -c 600 || true)
 base=$(cat "$sdd/task-$n-base")
 head=$(git -C "$wt" rev-parse HEAD)
 on=$(git -C "$wt" symbolic-ref --short -q HEAD || echo detached)
@@ -192,9 +207,16 @@ result() { # $1 = JSON object to extend with the dispatch facts
           usage: $usage, warnings: $warnings}' <<< "$1"
 }
 fail() { # $1 = message, $2 = error_kind
-  result "$(jq -n --arg e "$1" --arg k "${2:-other}" \
+  local msg=$1 k=${2:-other}
+  # A response whose reasoning reached the declared cap will reach it again
+  # on resume: the cap, not the task size, is what has to change.
+  if [ "$k" = output_length ] && [ -n "$out_limit" ] && [ "$peak_output" -ge $((out_limit * 9 / 10)) ]; then
+    msg+="; the largest response used $peak_output of the model's declared limit.output $out_limit (reasoning counts toward it), so a resume will likely stop the same way: raise limit.output"
+  fi
+  result "$(jq -n --arg e "$msg" --arg k "$k" --arg t "$last_text" \
     '{status: "ERROR", error: $e, error_kind: $k}
-     + if $k == "context_overflow" or $k == "output_length" then {resumable: true} else {} end')"
+     + if $k == "context_overflow" or $k == "output_length" then {resumable: true} else {} end
+     + if $k == "no_report" then {last_text: $t} else {} end')"
   exit 1
 }
 case $err_name in
@@ -211,7 +233,7 @@ if [ ! -s "$report" ]; then
   # error event); only the last step_finish's reason says so.
   [ "$last_finish" != length ] ||
     fail "the last response stopped at the model's output limit before a report was written" output_length
-  fail "no report written to $report"
+  fail "no report written to $report" no_report
 fi
 status=$(jq -r 'if type == "object" then .status else empty end' "$report" 2>/dev/null || true)
 case $status in
